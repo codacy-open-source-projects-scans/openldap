@@ -196,11 +196,13 @@ chkResponseList(
 				tmp = NULL;
 			}
 
-			if ( tmp == NULL ) {
+			if ( tmp == NULL && msgid != LDAP_RES_ANY ) {
 				lm = NULL;
 			}
 
-			break;
+			if ( tmp || msgid != LDAP_RES_ANY ) {
+				break;
+			}
 		}
 		lastlm = &lm->lm_next;
 	}
@@ -295,7 +297,11 @@ wait4msg(
 #endif /* LDAP_DEBUG */
 
 		if ( ( *result = chkResponseList( ld, msgid, all ) ) != NULL ) {
-			rc = (*result)->lm_msgtype;
+			if ( all == LDAP_MSG_ALL && (*result)->lm_chain ) {
+				rc = (*result)->lm_chain_tail->lm_msgtype;
+			} else {
+				rc = (*result)->lm_msgtype;
+			}
 
 		} else {
 			int lc_ready = 0;
@@ -1082,7 +1088,7 @@ nextresp2:
 			chain_head->lm_chain_tail = newmsg;
 			*result = chkResponseList( ld, msgid, all );
 			ld->ld_errno = LDAP_SUCCESS;
-			return( (*result)->lm_msgtype );
+			return( (*result)->lm_chain_tail->lm_msgtype );
 		}
 	}
 #endif /* LDAP_CONNECTIONLESS */
