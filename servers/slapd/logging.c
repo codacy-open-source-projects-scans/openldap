@@ -162,6 +162,8 @@ slap_debug_print( const char *data )
 		}
 
 #ifdef _WIN32
+		if ( logfile_format <= LFMT_DEBUG )
+			ptr += poffset;	/* only nonzero if logfile-format was explicitly set */
 		len = write( logfile_fd, ptr, len );
 #else
 		len = writev( logfile_fd, iov, 2 );
