@@ -184,6 +184,9 @@ do_add( Operation *op, SlapReply *rs )
 		goto done;
 	}
 
+	/* after mods2entry succeeds, vals must not be freed here */
+	freevals = 0;
+
 	/* make sure RDN is present in attrs */
 	if ( !is_entry_glue ( op->ora_e )) {
 		rs->sr_err = entry_naming_check( op->ora_e, get_relax( op ), 1, &rs->sr_text, textbuf, textlen );
@@ -193,7 +196,6 @@ do_add( Operation *op, SlapReply *rs )
 		}
 	}
 
-	freevals = 0;
 	oex = op->o_tmpalloc( sizeof(OpExtraDB), op->o_tmpmemctx );
 	oex->oe.oe_key = (void *)do_add;
 	oex->oe_db = NULL;
