@@ -2,7 +2,7 @@
 /* $OpenLDAP$ */
 /* This work is part of OpenLDAP Software <http://www.openldap.org/>.
  *
- * Copyright 2005-2022 The OpenLDAP Foundation.
+ * Copyright 2005-2024 The OpenLDAP Foundation.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -285,6 +285,7 @@ static OidRec OidMacros[] = {
  * OLcfgOv{Oc|At}:21			-> sssvlv
  * OLcfgOv{Oc|At}:22			-> autoca
  * OLcfgOv{Oc|At}:24			-> remoteauth
+ * OLcfgOv{Oc|At}:25			-> nestgroup
  */
 
 /* alphabetical ordering */

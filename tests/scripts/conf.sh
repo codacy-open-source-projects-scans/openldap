@@ -2,7 +2,7 @@
 # $OpenLDAP$
 ## This work is part of OpenLDAP Software <http://www.openldap.org/>.
 ##
-## Copyright 1998-2022 The OpenLDAP Foundation.
+## Copyright 1998-2024 The OpenLDAP Foundation.
 ## All rights reserved.
 ##
 ## Redistribution and use in source and binary forms, with or without
@@ -42,6 +42,7 @@ sed -e "s/@BACKEND@/${BACKEND}/"			\
 	-e "s/^#${AC_dynlist}#//"			\
 	-e "s/^#${AC_homedir}#//"			\
 	-e "s/^#${AC_memberof}#//"			\
+	-e "s/^#${AC_nestgroup}#//"			\
 	-e "s/^#${AC_pcache}#//"			\
 	-e "s/^#${AC_ppolicy}#//"			\
 	-e "s/^#${AC_refint}#//"			\
