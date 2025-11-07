@@ -78,6 +78,8 @@ SLEEP1=${SLEEP1-7}
 SLEEP2=${SLEEP2-15}
 TIMEOUT=${TIMEOUT-8}
 
+OS_WINDOWS=${AC_OS_WINDOWS-no}
+
 # dirs
 PROGDIR="$OBJDIR/tests/progs"
 DATADIR=${USER_DATADIR-./testdata}
@@ -164,6 +166,7 @@ METACONF=$DATADIR/slapd-meta.conf
 METACONF1=$DATADIR/slapd-meta-target1.conf
 METACONF2=$DATADIR/slapd-meta-target2.conf
 ASYNCMETACONF=$DATADIR/slapd-asyncmeta.conf
+ASYNCMETACONF2=$DATADIR/slapd-asyncmeta-conttl.conf
 GLUELDAPCONF=$DATADIR/slapd-glue-ldap.conf
 ACICONF=$DATADIR/slapd-aci.conf
 VALSORTCONF=$DATADIR/slapd-valsort.conf

@@ -749,7 +749,7 @@ url2query(
 		}
 	}
 
-	if ( got != GOT_ALL ) {
+	if ( (got & GOT_ALL) != GOT_ALL) {
 		rc = 1;
 		goto error;
 	}
@@ -792,7 +792,7 @@ url2query(
 		qt = qm->attr_sets[attrset].templates;
 		for ( ; qt; qt = qt->qtnext ) {
 			/* find if template i can potentially answer tempstr */
-			if ( bvmatch( &qt->querystr, &tempstr ) ) {
+			if ( ber_bvstrcasecmp( &qt->querystr, &tempstr ) ) {
 				break;
 			}
 		}
@@ -802,7 +802,11 @@ url2query(
 			goto error;
 		}
 
-		cq = add_query( op, qm, &query, qt, PC_POSITIVE, 0 );
+		if (BER_BVISNULL( &uuid )) {
+		  cq = add_query( op, qm, &query, qt, PC_NEGATIVE, 0 );
+		} else {
+		  cq = add_query( op, qm, &query, qt, PC_POSITIVE, 0 );
+		}
 		if ( cq != NULL ) {
 			cq->expiry_time = expiry_time;
 			cq->refresh_time = refresh_time;
@@ -843,6 +847,7 @@ merge_entry(
 	Attribute		*attr;
 	char			textbuf[SLAP_TEXT_BUFLEN];
 	size_t			textlen = sizeof(textbuf);
+	struct berval	odn, ondn;
 
 	SlapReply sreply = {REP_RESULT};
 
@@ -864,6 +869,9 @@ merge_entry(
 	op->o_callback = &cb;
 	op->o_time = slap_get_time();
 	op->o_do_not_cache = 1;
+
+	odn = op->o_req_dn;
+	ondn = op->o_req_ndn;
 
 	op->ora_e = e;
 	op->o_req_dn = e->e_name;
@@ -896,6 +904,8 @@ merge_entry(
 		rc = 1;
 	}
 
+	op->o_req_dn = odn;
+	op->o_req_ndn = ondn;
 	return rc;
 }
 
@@ -1580,6 +1590,8 @@ add_query(
 
 	case PC_NEGATIVE:
 		ttl = templ->negttl;
+		if ( templ->ttr )
+			ttr = now + templ->ttr;
 		break;
 
 	case PC_SIZELIMIT:
@@ -2293,6 +2305,14 @@ pcache_remove_entry_queries_from_cache(
 	return LDAP_SUCCESS;
 }
 
+static void
+assign_uuid( struct berval *query_uuid )
+{
+	char		uuidbuf[ LDAP_LUTIL_UUIDSTR_BUFSIZE ];
+	query_uuid->bv_len = lutil_uuidstr( uuidbuf, sizeof(uuidbuf) );
+	ber_str2bv( uuidbuf, query_uuid->bv_len, 1, query_uuid );
+}
+
 static int
 cache_entries(
 	Operation	*op,
@@ -2304,15 +2324,12 @@ cache_entries(
 	int		return_val = 0;
 	Entry		*e;
 	struct berval	crp_uuid;
-	char		uuidbuf[ LDAP_LUTIL_UUIDSTR_BUFSIZE ];
 	Operation	*op_tmp;
 	Connection	conn = {0};
 	OperationBuffer opbuf;
 	void		*thrctx = ldap_pvt_thread_pool_context();
 
-	query_uuid->bv_len = lutil_uuidstr(uuidbuf, sizeof(uuidbuf));
-	ber_str2bv(uuidbuf, query_uuid->bv_len, 1, query_uuid);
-
+	assign_uuid( query_uuid );
 	connection_fake_init2( &conn, &opbuf, thrctx, 0 );
 	op_tmp = &opbuf.ob_op;
 	op_tmp->o_bd = &cm->db;
@@ -2320,7 +2337,7 @@ cache_entries(
 	op_tmp->o_ndn = cm->db.be_rootndn;
 
 	Debug( pcache_debug, "UUID for query being added = %s\n",
-			uuidbuf );
+			query_uuid->bv_val );
 
 	for ( e=si->head; e; e=si->head ) {
 		si->head = e->e_private;
@@ -3268,6 +3285,7 @@ typedef struct refresh_info {
 	dnlist *ri_dels;
 	BackendDB *ri_be;
 	CachedQuery *ri_q;
+	time_t		ri_ttl;
 } refresh_info;
 
 static dnlist *dnl_alloc( Operation *op, struct berval *bvdn )
@@ -3299,7 +3317,11 @@ refresh_merge( Operation *op, SlapReply *rs )
 			/* No local entry, just add it. FIXME: we are not checking
 			 * the cache entry limit here
 			 */
-			 merge_entry( op, rs->sr_entry, 1, &ri->ri_q->q_uuid );
+			if ( BER_BVISNULL( &ri->ri_q->q_uuid )) {
+				assign_uuid( &ri->ri_q->q_uuid );
+				ri->ri_q->expiry_time = slap_get_time() + ri->ri_ttl;
+			}
+			merge_entry( op, rs->sr_entry, 1, &ri->ri_q->q_uuid );
 		} else {
 			/* Entry exists, update it */
 			Entry ne;
@@ -3396,7 +3418,7 @@ refresh_purge( Operation *op, SlapReply *rs )
 }
 
 static int
-refresh_query( Operation *op, CachedQuery *query, slap_overinst *on )
+refresh_query( Operation *op, CachedQuery *query, slap_overinst *on, QueryTemplate *templ)
 {
 	SlapReply rs = {REP_RESULT};
 	slap_callback cb = { 0 };
@@ -3407,6 +3429,7 @@ refresh_query( Operation *op, CachedQuery *query, slap_overinst *on )
 	AttributeName attrs[ 2 ] = {{{ 0 }}};
 	dnlist *dn;
 	int rc;
+	int query_is_negative = 0;
 
 	ldap_pvt_thread_mutex_lock( &query->answerable_cnt_mutex );
 	query->refcnt = 0;
@@ -3418,6 +3441,7 @@ refresh_query( Operation *op, CachedQuery *query, slap_overinst *on )
 	/* cache DB */
 	ri.ri_be = op->o_bd;
 	ri.ri_q = query;
+	ri.ri_ttl = templ->ttl;
 
 	op->o_tag = LDAP_REQ_SEARCH;
 	op->o_protocol = LDAP_VERSION3;
@@ -3442,6 +3466,9 @@ refresh_query( Operation *op, CachedQuery *query, slap_overinst *on )
 		op->o_bd = ri.ri_be;
 		goto leave;
 	}
+
+	if (!ri.ri_dns && !BER_BVISNULL( &query->q_uuid ))
+	        query_is_negative = 1;
 
 	/* Get the DNs of all entries matching this query */
 	cb.sc_response = refresh_purge;
@@ -3492,6 +3519,12 @@ refresh_query( Operation *op, CachedQuery *query, slap_overinst *on )
 		}
 		ri.ri_dels = dn->next;
 		op->o_tmpfree( dn, op->o_tmpmemctx );
+	}
+
+	if ( query_is_negative ) {
+		ber_memfree( query->q_uuid.bv_val );
+		BER_BVZERO( &query->q_uuid );
+		query->expiry_time = slap_get_time() + templ->negttl;
 	}
 
 leave:
@@ -3560,8 +3593,13 @@ consistency_check(
 				 * expiration has been hit, then skip the refresh since
 				 * we're just going to discard the result anyway.
 				 */
-				if ( query->refcnt )
-					query->expiry_time = op->o_time + templ->ttl;
+				if ( query->refcnt ) {
+					if ( BER_BVISNULL( &query->q_uuid )) {
+						query->expiry_time = op->o_time + templ->negttl;
+					} else {
+						query->expiry_time = op->o_time + templ->ttl;
+					}
+				}
 				if ( query->expiry_time > op->o_time ) {
 					/* perform actual refresh below */
 					continue;
@@ -3641,7 +3679,7 @@ consistency_check(
 					 * we're just going to discard the result anyway.
 					 */
 					if ( query->expiry_time > op->o_time ) {
-						refresh_query( op, query, on );
+					        refresh_query( op, query, on, templ );
 						query->refresh_time = op->o_time + templ->ttr;
 					}
 				}
@@ -3874,32 +3912,41 @@ pc_cf_gen( ConfigArgs *c )
 			break;
 		case PC_ATTR:
 			for (i=0; i<cm->numattrsets; i++) {
-				if ( !qm->attr_sets[i].count ) continue;
+				if ( !(qm->attr_sets[i].flags & PC_CONFIGURED) ) continue;
 
 				bv.bv_len = snprintf( c->cr_msg, sizeof( c->cr_msg ), "%d", i );
-
-				/* count the attr length */
-				for ( attr_name = qm->attr_sets[i].attrs;
-					attr_name->an_name.bv_val; attr_name++ )
-				{
-					bv.bv_len += attr_name->an_name.bv_len + 1;
-					if ( attr_name->an_desc &&
-							( attr_name->an_desc->ad_flags & SLAP_DESC_TEMPORARY ) ) {
-						bv.bv_len += STRLENOF("undef:");
-					}
-				}
-
-				bv.bv_val = ch_malloc( bv.bv_len+1 );
-				ptr = lutil_strcopy( bv.bv_val, c->cr_msg );
-				for ( attr_name = qm->attr_sets[i].attrs;
-					attr_name->an_name.bv_val; attr_name++ ) {
+				if ( !qm->attr_sets[i].count ) {
+					bv.bv_len += sizeof( LDAP_NO_ATTRS );
+					bv.bv_val = ch_malloc( bv.bv_len+1 );
+					ptr = lutil_strcopy( bv.bv_val, c->cr_msg );
 					*ptr++ = ' ';
-					if ( attr_name->an_desc &&
-							( attr_name->an_desc->ad_flags & SLAP_DESC_TEMPORARY ) ) {
-						ptr = lutil_strcopy( ptr, "undef:" );
+					lutil_strcopy( ptr, LDAP_NO_ATTRS );
+				} else {
+
+					/* count the attr length */
+					for ( attr_name = qm->attr_sets[i].attrs;
+						attr_name->an_name.bv_val; attr_name++ )
+					{
+						bv.bv_len += attr_name->an_name.bv_len + 1;
+						if ( attr_name->an_desc &&
+								( attr_name->an_desc->ad_flags & SLAP_DESC_TEMPORARY ) ) {
+							bv.bv_len += STRLENOF("undef:");
+						}
 					}
-					ptr = lutil_strcopy( ptr, attr_name->an_name.bv_val );
+
+					bv.bv_val = ch_malloc( bv.bv_len+1 );
+					ptr = lutil_strcopy( bv.bv_val, c->cr_msg );
+					for ( attr_name = qm->attr_sets[i].attrs;
+						attr_name->an_name.bv_val; attr_name++ ) {
+						*ptr++ = ' ';
+						if ( attr_name->an_desc &&
+								( attr_name->an_desc->ad_flags & SLAP_DESC_TEMPORARY ) ) {
+							ptr = lutil_strcopy( ptr, "undef:" );
+						}
+						ptr = lutil_strcopy( ptr, attr_name->an_name.bv_val );
+					}
 				}
+
 				ber_bvarray_add( &c->rvalue_vals, &bv );
 			}
 			if ( !c->rvalue_vals )

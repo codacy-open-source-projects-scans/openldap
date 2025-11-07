@@ -757,6 +757,7 @@ LDAP_SLAPD_F (int) connections_shutdown LDAP_P((void));
 LDAP_SLAPD_F (int) connections_destroy LDAP_P((void));
 LDAP_SLAPD_F (int) connections_timeout_idle LDAP_P((time_t));
 LDAP_SLAPD_F (void) connections_drop LDAP_P((void));
+LDAP_SLAPD_F (void) connections_drop_db LDAP_P(( BackendDB *be ));
 
 LDAP_SLAPD_F (Connection *) connection_client_setup LDAP_P((
 	ber_socket_t s,
@@ -1569,7 +1570,7 @@ LDAP_SLAPD_F (char *) phonetic LDAP_P(( char *s ));
 /*
  * proxyp.c
  */
-LDAP_SLAPD_F (int) proxyp LDAP_P((ber_socket_t sfd, Sockaddr *from));
+LDAP_SLAPD_F (int) proxyp LDAP_P((ber_socket_t sfd, Sockaddr *from, ber_socklen_t *salen));
 
 /*
  * referral.c

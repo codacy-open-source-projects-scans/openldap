@@ -193,6 +193,8 @@ AH_BOTTOM([
 AC_CONFIG_HEADERS([include/portable.h:include/portable.hin:include/slapd-modules.hin])
 AC_CONFIG_HEADERS([include/ldap_features.h:include/ldap_features.hin])
 AC_CONFIG_HEADERS([include/lber_types.h:include/lber_types.hin])
+AC_CONFIG_HEADERS([include/liblber-config.h:include/liblber-config.hin])
+AC_CONFIG_HEADERS([include/libldap-config.h:include/libldap-config.hin])
 
 dnl ================================================================
 dnl Start Args
@@ -357,6 +359,8 @@ OL_ARG_ENABLE_OV(homedir, [Home Directory Management overlay],
 OL_ARG_ENABLE_OV(memberof, [Reverse Group Membership overlay],
 	no, [no yes mod], ol_enable_overlays)
 OL_ARG_ENABLE_OV(nestgroup, [Nested Group overlay],
+	no, [no yes mod], ol_enable_overlays)
+OL_ARG_ENABLE_OV(otp, [OTP 2-factor authentication overlay],
 	no, [no yes mod], ol_enable_overlays)
 OL_ARG_ENABLE_OV(ppolicy, [Password Policy overlay],
 	no, [no yes mod], ol_enable_overlays)
@@ -701,10 +705,23 @@ OL_MSVC
 dnl ----------------------------------------------------------------
 dnl Checks for Windows NT
 case $host_os in
-  *mingw32* ) ac_cv_mingw32=yes ;;
-  *cygwin* ) ac_cv_cygwin=yes ;;
-  *interix* ) ac_cv_interix=yes ;;
+  *mingw32* )
+    ac_cv_mingw32=yes
+    OS_WINDOWS=yes
+    ;;
+  *cygwin* )
+    ac_cv_cygwin=yes
+    OS_WINDOWS=yes
+    ;;
+  *interix* )
+    ac_cv_interix=yes
+    OS_WINDOWS=yes
+    ;;
+  * )
+    OS_WINDOWS=no
+    ;;
 esac
+AC_SUBST([OS_WINDOWS])
 
 AC_CHECK_TOOL(RC, windres, )
 
@@ -1323,7 +1340,7 @@ case $ol_with_threads in auto | yes | posix)
 		dnl 	pthread_create() in $LIBS
 		dnl
 		dnl Check special pthread (final) flags
-		dnl 	[skipped] pthread_create() with -mt (Solaris) [disabled]
+		dnl 	pthread_create() with -mt (Solaris/HP-UX)
 		dnl 	pthread_create() with -kthread (FreeBSD)
 		dnl 	pthread_create() with -pthread (FreeBSD/Digital Unix)
 		dnl 	pthread_create() with -pthreads (?)
@@ -1361,7 +1378,7 @@ case $ol_with_threads in auto | yes | posix)
 			ol_link_pthreads=""
 		fi
 
-dnl		OL_PTHREAD_TRY([-mt],		[ol_cv_pthread_mt])
+		OL_PTHREAD_TRY([-mt],		[ol_cv_pthread_mt])
 		OL_PTHREAD_TRY([-kthread],	[ol_cv_pthread_kthread])
 		OL_PTHREAD_TRY([-pthread],	[ol_cv_pthread_pthread])
 		OL_PTHREAD_TRY([-pthreads],	[ol_cv_pthread_pthreads])

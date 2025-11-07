@@ -1894,6 +1894,7 @@ struct BackendDB {
 #define SLAP_DBFLAG_DISABLED	0x100000U
 #define SLAP_DBFLAG_LASTBIND	0x200000U
 #define SLAP_DBFLAG_OPEN	0x400000U	/* db is currently open */
+#define SLAP_DBFLAG_LASTBIND_ASSERT	0x800000U /* send assert control when forwarding pwdLastSuccess */
 	slap_mask_t	be_flags;
 #define SLAP_DBFLAGS(be)			((be)->be_flags)
 #define SLAP_NOLASTMOD(be)			(SLAP_DBFLAGS(be) & SLAP_DBFLAG_NOLASTMOD)
@@ -1926,6 +1927,7 @@ struct BackendDB {
 #define SLAP_DBOPEN(be)			(SLAP_DBFLAGS(be) & SLAP_DBFLAG_OPEN)
 #define SLAP_DBACL_ADD(be)			(SLAP_DBFLAGS(be) & SLAP_DBFLAG_ACL_ADD)
 #define SLAP_SYNC_SUBENTRY(be)			(SLAP_DBFLAGS(be) & SLAP_DBFLAG_SYNC_SUBENTRY)
+#define SLAP_LASTBIND_ASSERT(be)		(SLAP_DBFLAGS(be) & SLAP_DBFLAG_LASTBIND_ASSERT)
 
 	slap_mask_t	be_restrictops;		/* restriction operations */
 #define SLAP_RESTRICT_OP_ADD		0x0001U
@@ -2990,6 +2992,13 @@ struct Connection {
 	long	c_n_ops_completed;	/* num of ops completed */
 	long	c_n_ops_async;		/* mum of ops currently executing asynchronously */
 
+	long    c_n_ops_defer_total;      /* num of total deferred ops */
+	long    c_n_ops_defer_binding;    /* num of ops deferred because the connection is binding */
+	long    c_n_ops_defer_closing;    /* num of ops deferred because the connection is closing */
+	long    c_n_ops_defer_executing;  /* num of ops deferred because of too many executing ops */
+	long    c_n_ops_defer_pending;    /* num of ops deferred because of too many pending ops */
+	long    c_n_ops_defer_writewait;  /* num of ops deferred because the connection is waiting to write */
+
 	long	c_n_get;		/* num of get calls */
 	long	c_n_read;		/* num of read calls */
 	long	c_n_write;		/* num of write calls */
@@ -3046,6 +3055,7 @@ struct Listener {
 	int	sl_tcp_rmem;	/* custom TCP read buffer size */
 	int	sl_tcp_wmem;	/* custom TCP write buffer size */
 #endif
+	ldap_pvt_mp_t sl_n_conns_opened; /* total number of connections opened since startup */
 };
 
 /*

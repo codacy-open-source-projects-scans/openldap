@@ -51,7 +51,7 @@ typedef struct oid_name {
 	struct berval name;
 } oid_name;
 
-static oid_name oids[] = {
+static const oid_name oids[] = {
 	{ BER_BVC("2.5.4.3"), BER_BVC("cn") },
 	{ BER_BVC("2.5.4.4"), BER_BVC("sn") },
 	{ BER_BVC("2.5.4.6"), BER_BVC("c") },
@@ -383,6 +383,7 @@ ldap_int_tls_connect( LDAP *ld, LDAPConn *conn, const char *host )
 		if ( lo && lo->ldo_tls_connect_cb && lo->ldo_tls_connect_cb !=
 			ld->ld_options.ldo_tls_connect_cb )
 			lo->ldo_tls_connect_cb( ld, ssl, ctx, lo->ldo_tls_connect_arg );
+		conn->lconn_status = LDAP_CONNST_TLS_INPROGRESS;
 	}
 
 	/* pass hostname for SNI, but only if it's an actual name
@@ -441,12 +442,14 @@ ldap_int_tls_connect( LDAP *ld, LDAPConn *conn, const char *host )
 		ber_sockbuf_remove_io( sb, &ber_sockbuf_io_debug,
 			LBER_SBIOD_LEVEL_TRANSPORT );
 #endif
+		conn->lconn_status = LDAP_CONNST_CONNECTED;
 		return -1;
 	}
 
 	Debug2( LDAP_DEBUG_CONNS, "TLS: session established tls_proto=%s tls_cipher=%s\n",
 		ldap_pvt_tls_get_version( ssl ), ldap_pvt_tls_get_cipher( ssl ) );
 
+	conn->lconn_status = LDAP_CONNST_CONNECTED;
 	return 0;
 }
 
@@ -519,14 +522,19 @@ int
 ldap_tls_inplace( LDAP *ld )
 {
 	Sockbuf		*sb = NULL;
+	LDAPConn	*lc = ld->ld_defconn;
 
-	if ( ld->ld_defconn && ld->ld_defconn->lconn_sb ) {
+	if ( lc && lc->lconn_sb ) {
 		sb = ld->ld_defconn->lconn_sb;
 
 	} else if ( ld->ld_sb ) {
 		sb = ld->ld_sb;
 
 	} else {
+		return 0;
+	}
+
+	if ( lc && lc->lconn_status == LDAP_CONNST_TLS_INPROGRESS ) {
 		return 0;
 	}
 
@@ -1162,6 +1170,9 @@ ldap_int_tls_start ( LDAP *ld, LDAPConn *conn, LDAPURLDesc *srv )
 	  */
 	while ( ret > 0 ) {
 		if ( async ) {
+			ld->ld_errno = LDAP_X_CONNECTING;
+			return (ld->ld_errno);
+		} else if ( ld->ld_options.ldo_tm_net.tv_sec >= 0 ) {
 			struct timeval curr_time_tv, delta_tv;
 			int wr=0;
 
@@ -1216,8 +1227,16 @@ ldap_int_tls_start ( LDAP *ld, LDAPConn *conn, LDAPURLDesc *srv )
 				ld->ld_errno = LDAP_TIMEOUT;
 				break;
 			}
+			/* ldap_int_poll switches the socket back to blocking, but we want
+			 * it non-blocking before calling ldap_int_tls_connect */
+			ber_sockbuf_ctrl( sb, LBER_SB_OPT_SET_NONBLOCK, (void*)1 );
 		}
 		ret = ldap_int_tls_connect( ld, conn, host );
+	}
+
+	if ( !async && ld->ld_options.ldo_tm_net.tv_sec >= 0 ) {
+		/* Restore original sb status */
+		ber_sockbuf_ctrl( sb, LBER_SB_OPT_SET_NONBLOCK, (void*)0 );
 	}
 
 	if ( ret < 0 ) {
@@ -1375,7 +1394,7 @@ ldap_start_tls_s ( LDAP *ld,
 #define	LBER_TAG_UNIVERSAL	((ber_tag_t) 0x1cUL)
 #define	LBER_TAG_BMP		((ber_tag_t) 0x1eUL)
 
-static oid_name *
+static const oid_name *
 find_oid( struct berval *oid )
 {
 	int i;
@@ -1500,7 +1519,7 @@ ldap_X509dn2bv( void *x509_name, struct berval *bv, LDAPDN_rewrite_func *func,
 	int csize;
 	ber_tag_t tag;
 	ber_len_t len;
-	oid_name *oidname;
+	const oid_name *oidname;
 
 	struct berval	Oid, Val, oid2, *in = x509_name;
 

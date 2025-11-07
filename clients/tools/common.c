@@ -424,6 +424,19 @@ void tool_perror(
 	}
 }
 
+int tool_perror2(
+	LDAP *ld, 
+	const char *func )
+{
+	int err;
+	char *msg = NULL;
+
+	ldap_get_option( ld, LDAP_OPT_RESULT_CODE, (void*)&err );
+	ldap_get_option( ld, LDAP_OPT_DIAGNOSTIC_MESSAGE, (void*)&msg );
+	tool_perror( func, err, NULL, NULL, msg, NULL );
+	ldap_memfree( msg );
+	return err;
+}
 
 void
 tool_args( int argc, char **argv )
@@ -794,6 +807,9 @@ tool_args( int argc, char **argv )
 				exit( EXIT_FAILURE );
 			}
 			ldapuri = ber_strdup( optarg );
+			if ( ldapuri == NULL ) {
+				exit( EXIT_FAILURE );
+			}
 			break;
 		case 'I':
 #ifdef HAVE_CYRUS_SASL
@@ -994,6 +1010,9 @@ tool_args( int argc, char **argv )
 			break;
 		case 'w':	/* password */
 			passwd.bv_val = ber_strdup( optarg );
+			if ( passwd.bv_val == NULL ) {
+				exit( EXIT_FAILURE );
+			}
 			{
 				char* p;
 
@@ -1180,6 +1199,7 @@ tool_conn_setup( int dont, void (*private_setup)( LDAP * ) )
 	LDAP *ld = NULL;
 
 	if ( debug ) {
+#ifdef LDAP_DEBUG
 		if( ber_set_option( NULL, LBER_OPT_DEBUG_LEVEL, &debug )
 			!= LBER_OPT_SUCCESS )
 		{
@@ -1192,6 +1212,10 @@ tool_conn_setup( int dont, void (*private_setup)( LDAP * ) )
 			fprintf( stderr,
 				"Could not set LDAP_OPT_DEBUG_LEVEL %d\n", debug );
 		}
+#else /* !LDAP_DEBUG */
+		fprintf( stderr,
+				"Must compile with LDAP_DEBUG for debugging\n", prog );
+#endif /* !LDAP_DEBUG */
 	}
 
 #ifdef SIGPIPE
@@ -1499,6 +1523,9 @@ tool_bind( LDAP *ld )
 				tool_exit( ld, EXIT_FAILURE );
 			}
 			passwd.bv_val = ber_strdup( pw );
+			if ( passwd.bv_val == NULL ) {
+				tool_exit( ld, EXIT_FAILURE );
+			}
 			passwd.bv_len = strlen( passwd.bv_val );
 		}
 	}
@@ -1538,11 +1565,7 @@ tool_bind( LDAP *ld )
 			ldap_msgfree( result );
 
 			if ( ldap_result( ld, msgid, LDAP_MSG_ALL, NULL, &result ) == -1 || !result ) {
-				ldap_get_option( ld, LDAP_OPT_RESULT_CODE, (void*)&err );
-				ldap_get_option( ld, LDAP_OPT_DIAGNOSTIC_MESSAGE, (void*)&info );
-				tool_perror( "ldap_sasl_interactive_bind",
-					err, NULL, NULL, info, NULL );
-				ldap_memfree( info );
+				err = tool_perror2( ld, "ldap_sasl_interactive_bind" );
 				tool_exit( ld, err );
 			}
 		} while ( rc == LDAP_SASL_BIND_IN_PROGRESS );
@@ -1564,15 +1587,14 @@ tool_bind( LDAP *ld )
 		/* simple bind */
 		rc = ldap_sasl_bind( ld, binddn, LDAP_SASL_SIMPLE, &passwd,
 			sctrlsp, NULL, &msgid );
-		if ( msgid == -1 ) {
-			tool_perror( "ldap_sasl_bind(SIMPLE)", rc,
-				NULL, NULL, NULL, NULL );
+		if ( rc == -1 ) {
+			rc = tool_perror2( ld, "ldap_sasl_bind(SIMPLE)" );
 			tool_exit( ld, rc );
 		}
 
 		rc = ldap_result( ld, msgid, LDAP_MSG_ALL, NULL, &result );
 		if ( rc == -1 ) {
-			tool_perror( "ldap_result", -1, NULL, NULL, NULL, NULL );
+			tool_perror2( ld, "ldap_result" );
 			tool_exit( ld, LDAP_LOCAL_ERROR );
 		}
 

@@ -20,10 +20,7 @@
 #ifndef	_LDAP_INT_H
 #define	_LDAP_INT_H 1
 
-#ifndef NO_THREADS
-#define LDAP_R_COMPILE 1
-#endif
-
+#include "libldap-config.h"
 #include "../liblber/lber-int.h"
 #include "lutil.h"
 #include "ldap_avl.h"
@@ -113,7 +110,6 @@
 
 #endif /* LDAP_DEBUG */
 
-#define LDAP_DEPRECATED 1
 #include "ldap.h"
 
 #include "ldap_pvt.h"
@@ -368,6 +364,7 @@ typedef struct ldap_conn {
 #define LDAP_CONNST_NEEDSOCKET		1
 #define LDAP_CONNST_CONNECTING		2
 #define LDAP_CONNST_CONNECTED		3
+#define LDAP_CONNST_TLS_INPROGRESS	4
 	LDAPURLDesc		*lconn_server;
 	BerElement		*lconn_ber;	/* ber receiving on this conn. */
 
@@ -742,6 +739,7 @@ LDAP_F (int) ldap_int_poll( LDAP *ld, ber_socket_t s,
 
 #if defined(HAVE_TLS) || defined(HAVE_CYRUS_SASL)
 LDAP_V (char *) ldap_int_hostname;
+LDAP_F (void) ldap_int_resolve_hostname(void);
 LDAP_F (char *) ldap_host_connected_to( Sockbuf *sb,
 	const char *host );
 #endif

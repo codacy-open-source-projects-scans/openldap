@@ -46,13 +46,17 @@ static char *syslog_prefix;
 static int splen;
 static int logfile_rotfail, logfile_openfail;
 
-typedef enum { LFMT_DEFAULT, LFMT_DEBUG, LFMT_SYSLOG_UTC, LFMT_SYSLOG_LOCAL } LogFormat;
+#define LFMT_LOCALTIME 0x04
+#define LFMT_MASK	 0x03
+typedef enum { LFMT_DEFAULT, LFMT_DEBUG, LFMT_SYSLOG_UTC, LFMT_RFC3339_UTC,
+	LFMT_SYSLOG_LOCAL = (LFMT_SYSLOG_UTC|LFMT_LOCALTIME) } LogFormat;
 static LogFormat logfile_format;
 
 static slap_verbmasks logformat_key[] = {
 	{ BER_BVC("default"),		LFMT_DEFAULT },
 	{ BER_BVC("debug"),			LFMT_DEBUG },
 	{ BER_BVC("syslog-utc"),	LFMT_SYSLOG_UTC },
+	{ BER_BVC("rfc3339-utc"),		LFMT_RFC3339_UTC },
 	{ BER_BVC("syslog-localtime"),		LFMT_SYSLOG_LOCAL },
 	{ BER_BVNULL, 0 }
 };
@@ -69,6 +73,13 @@ static char logpaths[2][MAXPATHLEN];
 static int logpathlen;
 
 #define SYSLOG_STAMP	"Mmm dd hh:mm:ss"
+#ifdef HAVE_CLOCK_GETTIME
+#define RFC3339_FRAC	".fffffffffZ"
+#else
+#define RFC3339_FRAC	".ffffffZ"
+#endif
+#define RFC3339_BASE	"YYYY-mm-ddTHH:MM:SS"
+#define RFC3339_STAMP	 RFC3339_BASE RFC3339_FRAC
 
 void
 slap_debug_print( const char *data )
@@ -84,11 +95,13 @@ slap_debug_print( const char *data )
 #ifdef HAVE_CLOCK_GETTIME
 	struct timespec tv;
 #define	TS	"%08x"
+#define	TSf	".%09ldZ"
 #define	Tfrac	tv.tv_nsec
 #define gettime(tv)	clock_gettime( CLOCK_REALTIME, tv )
 #else
 	struct timeval tv;
 #define	TS	"%05x"
+#define	TSf	".%06ldZ"
 #define	Tfrac	tv.tv_usec
 #define	gettime(tv)	gettimeofday( tv, NULL )
 #endif
@@ -111,7 +124,6 @@ slap_debug_print( const char *data )
 	datalen = len - prefixlen;
 	if ( !logfile_only )
 		(void)!write( 2, msgbuf+poffset, len );
-	ptr = msgbuf;
 #else
 	iov[0].iov_base = prefix;
 	iov[0].iov_len = sprintf( prefix, "%lx." TS " %p ",
@@ -171,20 +183,27 @@ slap_debug_print( const char *data )
 
 		if ( logfile_format > LFMT_DEBUG ) {
 			struct tm tm;
-			if ( logfile_format == LFMT_SYSLOG_UTC )
+			if ( !( logfile_format & LFMT_LOCALTIME ) )
 				ldap_pvt_gmtime( &tv.tv_sec, &tm );
 			else
 				ldap_pvt_localtime( &tv.tv_sec, &tm );
 #ifdef _WIN32
+			ptr = msgbuf;
 			if ( splen < prefixlen )
 				ptr += prefixlen - splen;
 			memcpy( ptr, syslog_prefix, splen );
 #else
 			ptr = syslog_prefix;
 #endif
-			strftime( ptr, sizeof( SYSLOG_STAMP ),
-				"%b %d %H:%M:%S", &tm );
-			ptr[ sizeof( SYSLOG_STAMP )-1 ] = ' ';
+			if (( logfile_format & LFMT_MASK ) == LFMT_SYSLOG_UTC ) {
+				ptr += strftime( ptr, sizeof( SYSLOG_STAMP ),
+					"%b %d %H:%M:%S", &tm );
+			}	else {
+				ptr += strftime( ptr, sizeof( RFC3339_BASE ),
+					"%Y-%m-%dT%H:%M:%S", &tm );
+				ptr += snprintf( ptr, sizeof( RFC3339_FRAC ), TSf, Tfrac );
+			}
+			*ptr = ' ';
 #ifdef _WIN32
 			len = datalen + splen;
 #else
@@ -194,6 +213,7 @@ slap_debug_print( const char *data )
 		}
 
 #ifdef _WIN32
+		ptr = msgbuf;
 		if ( logfile_format <= LFMT_DEBUG )
 			ptr += poffset;	/* only nonzero if logfile-format was explicitly set */
 		len = write( logfile_fd, ptr, len );
@@ -686,7 +706,14 @@ config_logging(ConfigArgs *c) {
 			break;
 		case CFG_LOGFILE_FORMAT:
 			if ( logfile_format ) {
-				value_add_one( &c->rvalue_vals, &logformat_key[logfile_format].word );
+				struct berval bv;
+				rc = enum_to_verb( logformat_key, logfile_format, &bv );
+				if ( rc > 0 ) {
+					value_add_one( &c->rvalue_vals, &bv );
+					rc = 0;
+				 } else {
+					rc = 1;
+				}
 			} else {
 				rc = 1;
 			}
@@ -799,6 +826,11 @@ reset:
 					c->log, c->cr_msg, c->argv[1]);
 				return( 1 );
 			}
+#ifdef HAVE_MKVERSION
+			else {
+				Debug( LDAP_DEBUG_ANY, "%s\n", Versionstr );
+			}
+#endif
 			ch_free( c->value_string );
 			break;
 
@@ -814,11 +846,12 @@ reset:
 			}
 			if ( syslog_prefix )
 				ch_free( syslog_prefix );
-			len = strlen( global_host ) + 1 + strlen( serverName ) + 1 + sizeof("[123456789]:") +
-				sizeof( SYSLOG_STAMP );
-			syslog_prefix = ch_malloc( len );
-			splen = sprintf( syslog_prefix, SYSLOG_STAMP " %s %s[%d]: ", global_host, serverName, getpid() );
 			logfile_format = logformat_key[i].mask;
+			len = strlen( global_host ) + 1 + strlen( serverName ) + 1 + sizeof(("[123456789]:")) +
+				(( logfile_format == LFMT_RFC3339_UTC) ? sizeof( RFC3339_STAMP ) : sizeof( SYSLOG_STAMP ));
+			syslog_prefix = ch_malloc( len );
+			splen = sprintf( syslog_prefix, "%s %s %s[%d]: ", ( logfile_format == LFMT_RFC3339_UTC ) ?
+				RFC3339_STAMP : SYSLOG_STAMP, global_host, serverName, getpid() );
 			}
 			break;
 

@@ -380,11 +380,9 @@ static int
 tlsmt_session_connect( LDAP *ld, tls_session *sess, const char *name_in )
 {
 	tlsmt_session *s = (tlsmt_session *)sess;
-	if (name_in) {
-		int ret = mbedtls_ssl_set_hostname( &(s->ssl_ctx), name_in );
-		if ( ret != 0 ) {
-			return ret;
-		}
+	int ret = mbedtls_ssl_set_hostname( &(s->ssl_ctx), name_in );
+	if ( ret != 0 ) {
+		return ret;
 	}
 
 	return tlsmt_session_accept(sess);
@@ -464,6 +462,9 @@ tlsmt_session_chkhost( LDAP *ld, tls_session *sess, const char *name_in )
 #else
 	struct in_addr addr;
 #endif
+
+	if ( !ldap_int_hostname )
+		ldap_int_resolve_hostname();
 
 	if( ldap_int_hostname &&
 		( !name_in || !strcasecmp( name_in, "localhost" ) ) )

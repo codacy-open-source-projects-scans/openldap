@@ -2811,7 +2811,6 @@ drop:
 
 typedef struct modify_ctxt {
 	Modifications *mx_orig;
-	Modifications *mx_free;
 	Entry *mx_entry;
 } modify_ctxt;
 
@@ -2823,11 +2822,8 @@ syncrepl_modify_cb( Operation *op, SlapReply *rs )
 	Modifications *ml;
 
 	op->orm_no_opattrs = 0;
+	slap_mods_free( op->orm_modlist, 0 );
 	op->orm_modlist = mx->mx_orig;
-	for ( ml = mx->mx_free; ml; ml = mx->mx_free ) {
-		mx->mx_free = ml->sml_next;
-		op->o_tmpfree( ml, op->o_tmpmemctx );
-	}
 	if ( mx->mx_entry ) {
 		entry_free( mx->mx_entry );
 	}
@@ -3001,6 +2997,8 @@ syncrepl_op_modify( Operation *op, SlapReply *rs )
 
 		op2.o_callback = &cb;
 		op2.o_bd = select_backend( &op2.o_req_ndn, 1 );
+		op2.o_dn = op2.o_bd->be_rootdn;
+		op2.o_ndn = op2.o_bd->be_rootndn;
 		op2.o_bd->be_search( &op2, &rs1 );
 		newlist = rx.rx_mods;
 	}
@@ -3016,10 +3014,10 @@ syncrepl_op_modify( Operation *op, SlapReply *rs )
 		sc->sc_next = op->o_callback;
 		sc->sc_cleanup = NULL;
 		sc->sc_writewait = NULL;
-		op->o_callback = sc;
+		overlay_callback_after_backover( op, sc, 1 );
+
 		op->orm_no_opattrs = 1;
 		mx->mx_orig = op->orm_modlist;
-		mx->mx_free = newlist;
 		mx->mx_entry = e_dup;
 		for ( ml = newlist; ml; ml=ml->sml_next ) {
 			if ( ml->sml_flags == SLAP_MOD_INTERNAL ) {
@@ -3700,6 +3698,7 @@ syncrepl_dirsync_message(
 			Debug( LDAP_DEBUG_ANY,
 				"syncrepl_dirsync_message: %s unknown attributeType %s\n",
 				si->si_ridtxt, tmp.sml_type.bv_val );
+			ch_free( mod );
 			return rc;
 		}
 		mod->sml_desc = ad;
@@ -6173,7 +6172,7 @@ slap_uuidstr_from_normalized(
 	new->bv_len = 36;
 
 	if ( ( new->bv_val = slap_sl_malloc( new->bv_len + 1, ctx ) ) == NULL ) {
-		rc = 1;
+		rc = -1;
 		goto done;
 	}
 

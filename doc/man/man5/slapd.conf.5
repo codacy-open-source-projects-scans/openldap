@@ -626,7 +626,7 @@ no effect on the command line tools. By default these messages
 only go to stderr and are not recorded anywhere else.
 Specifying a logfile copies messages to both stderr and the logfile.
 .TP
-.B logfile-format debug | syslog-utc | syslog-localtime
+.B logfile-format debug|syslog-utc|syslog-localtime|rfc3339-utc
 Specify the prefix format for messages written to the logfile. The debug
 format is the normal format used for slapd debug messages, with a timestamp
 in hexadecimal, followed by a thread ID.  The other options are to
@@ -1406,7 +1406,10 @@ by the syncrepl provider. By default, lastmod is on.
 Controls whether
 .B slapd
 will automatically maintain the pwdLastSuccess attribute for
-entries. By default, lastbind is off.
+entries. By default, lastbind is off. On a replication 
+consumer the pwdLastSuccess attribute will be forwarded 
+to the provider assuming updateref setting and chain overlay 
+are appropriately configured.
 .TP
 .B lastbind-precision <integer>
 If lastbind is enabled, specifies how frequently pwdLastSuccess
@@ -2071,7 +2074,8 @@ log format, or "changelog" if the log conforms
 to the obsolete \fIchangelog\fP format. If the
 .B syncdata
 parameter is omitted or set to "default" then the log parameters are
-ignored.
+ignored. If \fBmultiprovider\fP is being used, the same \fBlogbase\fP
+database must be configured on all of the providers.
 
 The
 .B lazycommit

@@ -165,6 +165,9 @@ handle_private_option( int i )
 			}
 
 			vc_sasl_mech = ber_strdup(cvalue);
+			if (vc_sasl_mech == NULL) {
+				exit(EXIT_FAILURE);
+			}
 #else
 #endif
 
@@ -182,6 +185,9 @@ handle_private_option( int i )
 			}
 
 			vc_sasl_realm = ber_strdup(cvalue);
+			if (vc_sasl_realm == NULL) {
+				exit(EXIT_FAILURE);
+			}
 #else
 			fprintf(stderr,
 				_("%s: not compiled with SASL support\n"), prog);
@@ -202,6 +208,9 @@ handle_private_option( int i )
 			}
 
 			vc_sasl_authcid = ber_strdup(cvalue);
+			if (vc_sasl_authcid == NULL) {
+				exit(EXIT_FAILURE);
+			}
 #else
 			fprintf(stderr,
 				_("%s: not compiled with SASL support\n"), prog);
@@ -222,6 +231,9 @@ handle_private_option( int i )
 			}
 
 			vc_sasl_authzid = ber_strdup(cvalue);
+			if (vc_sasl_authzid == NULL) {
+				exit(EXIT_FAILURE);
+			}
 #else
 			fprintf(stderr,
 				_("%s: not compiled with SASL support\n"), prog);
@@ -242,6 +254,9 @@ handle_private_option( int i )
 			}
 
 			vc_sasl_secprops = ber_strdup(cvalue);
+			if (vc_sasl_secprops == NULL) {
+				exit(EXIT_FAILURE);
+			}
 #else
 			fprintf(stderr,
 				_("%s: not compiled with SASL support\n"), prog);
@@ -381,10 +396,7 @@ main( int argc, char *argv[] )
 			ldap_msgfree(res);
 
 			if (ldap_result(ld, msgid, LDAP_MSG_ALL, NULL, &res) == -1 || !res) {
-				ldap_get_option(ld, LDAP_OPT_RESULT_CODE, (void*) &rc);
-				ldap_get_option(ld, LDAP_OPT_DIAGNOSTIC_MESSAGE, (void*) &text);
-				tool_perror( "ldap_verify_credentials_interactive", rc, NULL, NULL, text, NULL);
-				ldap_memfree(text);
+				rc = tool_perror2( ld, "ldap_verify_credentials_interactive" );
 				tool_exit(ld, rc);
 			}
 		} while (rc == LDAP_SASL_BIND_IN_PROGRESS);
@@ -426,7 +438,7 @@ main( int argc, char *argv[] )
 
 		    rc = ldap_result( ld, LDAP_RES_ANY, LDAP_MSG_ALL, &tv, &res );
 		    if ( rc < 0 ) {
-			    tool_perror( "ldap_result", rc, NULL, NULL, NULL, NULL );
+			    rc = tool_perror2( ld, "ldap_result" );
 			    tool_exit( ld, rc );
 		    }
 
