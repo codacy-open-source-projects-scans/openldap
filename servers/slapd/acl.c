@@ -1860,6 +1860,11 @@ slap_acl_mask(
 			ACL_PRIV_CLR( *mask, modmask );
 
 			/* cleanup */
+			if ( (modmask & ACL_PRIV_WRITE) && (*mask & ACL_PRIV_WRITE) ) {
+				/* ITS#7347 Allow subtractive -a/z/i to keep the other counterpart (so
+				 * that "=w" then "-a" -> "zi" etc.) */
+				ACL_PRIV_SET( *mask, ACL_ACCESS2PRIV(ACL_WRITE_) );
+			}
 			ACL_PRIV_CLR( *mask, ~ACL_PRIV_MASK );
 
 		} else {
@@ -1967,8 +1972,21 @@ acl_check_modlist(
 		}
 
 		switch ( mlist->sml_op ) {
-		case LDAP_MOD_REPLACE:
 		case LDAP_MOD_INCREMENT:
+			assert( mlist->sml_values != NULL );
+			assert( BER_BVISNULL( &mlist->sml_values[1] ) );
+
+			if ( ! access_allowed( op, e,
+				mlist->sml_desc, &mlist->sml_values[0],
+				( mlist->sml_flags & SLAP_MOD_MANAGING ) ? ACL_MANAGE : ACL_WINCR,
+				&state ) )
+			{
+				ret = 0;
+				goto done;
+			}
+			break;
+
+		case LDAP_MOD_REPLACE:
 			/*
 			 * We must check both permission to delete the whole
 			 * attribute and permission to add the specific attributes.
