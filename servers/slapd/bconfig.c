@@ -75,6 +75,9 @@ typedef struct {
 	CfEntryInfo *cb_root;
 	BackendDB	cb_db;	/* underlying database */
 	int		cb_got_ldif;
+#define BCONFIG_GOT_LDIF 0x1
+#define BCONFIG_GOT_FRONTEND 0x2
+#define BCONFIG_GOT_CONFIG 0x4
 	int		cb_use_ldif;
 	ldap_pvt_thread_rdwr_t cb_rwlock;
 } CfBackInfo;
@@ -4252,7 +4255,7 @@ config_ldif_resp( Operation *op, SlapReply *rs )
 		setup_cookie *sc = op->o_callback->sc_private;
 		struct berval pdn;
 
-		sc->cfb->cb_got_ldif = 1;
+		sc->cfb->cb_got_ldif |= BCONFIG_GOT_LDIF;
 		/* Does the frontend exist? */
 		if ( !sc->got_frontend ) {
 			if ( !strncmp( rs->sr_entry->e_nname.bv_val,
@@ -4279,6 +4282,7 @@ config_ldif_resp( Operation *op, SlapReply *rs )
 					op->o_noop = i;
 					sc->got_frontend++;
 				} else {
+					sc->cfb->cb_got_ldif |= BCONFIG_GOT_FRONTEND;
 					sc->got_frontend++;
 					goto ok;
 				}
@@ -4310,6 +4314,8 @@ config_ldif_resp( Operation *op, SlapReply *rs )
 				sc->config = config_build_entry( op, rs, sc->cfb->cb_root,
 					sc->ca, &rdn, &CFOC_DATABASE, sc->ca->be->be_cf_ocs );
 				op->o_noop = i;
+			} else {
+				sc->cfb->cb_got_ldif |= BCONFIG_GOT_CONFIG;
 			}
 			sc->got_config++;
 		}
@@ -4441,11 +4447,17 @@ config_setup_ldif( BackendDB *be, const char *dir, int readit ) {
 			rs_reinit( &rs, REP_RESULT );
 			op->ora_e = sc.frontend;
 			rc = op->o_bd->be_add( op, &rs );
+			if ( rc == LDAP_SUCCESS ) {
+				cfb->cb_got_ldif |= BCONFIG_GOT_FRONTEND;
+			}
 		}
 		if ( rc == LDAP_SUCCESS && sc.config ) {
 			rs_reinit( &rs, REP_RESULT );
 			op->ora_e = sc.config;
 			rc = op->o_bd->be_add( op, &rs );
+			if ( rc == LDAP_SUCCESS ) {
+				cfb->cb_got_ldif |= BCONFIG_GOT_CONFIG;
+			}
 		}
 		ldap_pvt_thread_pool_context_reset( thrctx );
 	} else {
@@ -4551,7 +4563,7 @@ read_config(const char *fname, const char *dir) {
 					return 1;
 				/* Assume it's slapadd with a config dir, let it continue */
 				rc = 0;
-				cfb->cb_got_ldif = 1;
+				cfb->cb_got_ldif = BCONFIG_GOT_LDIF;
 				cfb->cb_use_ldif = 1;
 				goto done;
 			}
@@ -8002,8 +8014,6 @@ config_tool_entry_get( BackendDB *be, ID id )
 		return NULL;
 }
 
-static int entry_put_got_frontend=0;
-static int entry_put_got_config=0;
 static ID
 config_tool_entry_put( BackendDB *be, Entry *e, struct berval *text )
 {
@@ -8021,7 +8031,7 @@ config_tool_entry_put( BackendDB *be, Entry *e, struct berval *text )
 	int isFrontendChild = 0;
 
 	/* Create entry for frontend database if it does not exist already */
-	if ( !entry_put_got_frontend ) {
+	if ( !(cfb->cb_got_ldif & BCONFIG_GOT_FRONTEND) ) {
 		if ( !strncmp( e->e_nname.bv_val, "olcDatabase", 
 				STRLENOF( "olcDatabase" ))) {
 			if ( strncmp( e->e_nname.bv_val + 
@@ -8030,6 +8040,8 @@ config_tool_entry_put( BackendDB *be, Entry *e, struct berval *text )
 					strncmp( e->e_nname.bv_val + 
 					STRLENOF( "olcDatabase" ), "=frontend",
 					STRLENOF( "=frontend" ))) {
+				struct berval message = BER_BVC("autocreation of \"olcDatabase={-1}frontend\" failed");
+
 				memset( &ca, 0, sizeof(ConfigArgs));
 				ca.be = frontendDB;
 				ca.bi = frontendDB->bd_info;
@@ -8051,21 +8063,19 @@ config_tool_entry_put( BackendDB *be, Entry *e, struct berval *text )
 				op->o_ndn = be->be_rootndn;
 				rc = slap_add_opattrs(op, NULL, NULL, 0, 0);
 				if ( rc != LDAP_SUCCESS ) {
-					text->bv_val = "autocreation of \"olcDatabase={-1}frontend\" failed";
-					text->bv_len = STRLENOF("autocreation of \"olcDatabase={-1}frontend\" failed");
+					ber_bvreplace( text, &message );
 					return NOID;
 				}
 
 				if ( ce && bi && bi->bi_tool_entry_put && 
 						bi->bi_tool_entry_put( &cfb->cb_db, ce, text ) != NOID ) {
-					entry_put_got_frontend++;
+					cfb->cb_got_ldif |= BCONFIG_GOT_FRONTEND;
 				} else {
-					text->bv_val = "autocreation of \"olcDatabase={-1}frontend\" failed";
-					text->bv_len = STRLENOF("autocreation of \"olcDatabase={-1}frontend\" failed");
+					ber_bvreplace( text, &message );
 					return NOID;
 				}
 			} else {
-				entry_put_got_frontend++;
+				cfb->cb_got_ldif |= BCONFIG_GOT_FRONTEND;
 				isFrontend = 1;
 			}
 		}
@@ -8074,7 +8084,7 @@ config_tool_entry_put( BackendDB *be, Entry *e, struct berval *text )
 	/* Child entries of the frontend database, e.g. slapo-chain's back-ldap
 	 * instances, may appear before the config database entry in the ldif, skip
 	 * auto-creation of olcDatabase={0}config in such a case */
-	if ( !entry_put_got_config &&
+	if ( !(cfb->cb_got_ldif & BCONFIG_GOT_CONFIG) &&
 			!strncmp( e->e_nname.bv_val, "olcDatabase", STRLENOF( "olcDatabase" ))) {
 		struct berval pdn;
 		dnParent( &e->e_nname, &pdn );
@@ -8097,7 +8107,8 @@ config_tool_entry_put( BackendDB *be, Entry *e, struct berval *text )
 	}
 
 	/* Create entry for config database if it does not exist already */
-	if ( !entry_put_got_config && !isFrontend && !isFrontendChild ) {
+	if ( !(cfb->cb_got_ldif & BCONFIG_GOT_CONFIG) && !isFrontend &&
+			!isFrontendChild ) {
 		if ( !strncmp( e->e_nname.bv_val, "olcDatabase",
 				STRLENOF( "olcDatabase" ))) {
 			if ( strncmp( e->e_nname.bv_val +
@@ -8106,6 +8117,8 @@ config_tool_entry_put( BackendDB *be, Entry *e, struct berval *text )
 					strncmp( e->e_nname.bv_val +
 					STRLENOF( "olcDatabase" ), "=config",
 					STRLENOF( "=config" )) ) {
+				struct berval message = BER_BVC("autocreation of \"olcDatabase={0}config\" failed");
+
 				memset( &ca, 0, sizeof(ConfigArgs));
 				ca.be = LDAP_STAILQ_FIRST( &backendDB );
 				ca.bi = ca.be->bd_info;
@@ -8128,20 +8141,18 @@ config_tool_entry_put( BackendDB *be, Entry *e, struct berval *text )
 				op->ora_e = ce;
 				rc = slap_add_opattrs(op, NULL, NULL, 0, 0);
 				if ( rc != LDAP_SUCCESS ) {
-					text->bv_val = "autocreation of \"olcDatabase={0}config\" failed";
-					text->bv_len = STRLENOF("autocreation of \"olcDatabase={0}config\" failed");
+					ber_bvreplace( text, &message );
 					return NOID;
 				}
 				if (ce && bi && bi->bi_tool_entry_put &&
 						bi->bi_tool_entry_put( &cfb->cb_db, ce, text ) != NOID ) {
-					entry_put_got_config++;
+					cfb->cb_got_ldif |= BCONFIG_GOT_CONFIG;
 				} else {
-					text->bv_val = "autocreation of \"olcDatabase={0}config\" failed";
-					text->bv_len = STRLENOF("autocreation of \"olcDatabase={0}config\" failed");
+					ber_bvreplace( text, &message );
 					return NOID;
 				}
 			} else {
-				entry_put_got_config++;
+				cfb->cb_got_ldif |= BCONFIG_GOT_CONFIG;
 			}
 		}
 	}
@@ -8149,7 +8160,9 @@ config_tool_entry_put( BackendDB *be, Entry *e, struct berval *text )
 		config_add_internal( cfb, e, &ca, NULL, NULL, NULL ) == 0 )
 		return bi->bi_tool_entry_put( &cfb->cb_db, e, text );
 	else {
-		ber_str2bv( ca.cr_msg, 0, 0, text );
+		struct berval bv;
+		ber_str2bv( ca.cr_msg, 0, 0, &bv );
+		ber_bvreplace( text, &bv );
 		return NOID;
 	}
 }
