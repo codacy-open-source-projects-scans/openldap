@@ -2104,8 +2104,7 @@ ppolicy_operational( Operation *op, SlapReply *rs )
 				sizeof(AclRegexMatches), op->o_tmpmemctx );
 
 		for ( pr = pi->policy_rules; pr; pr = pr->next ) {
-			int freendn = 0;
-			struct berval policy_ndn = BER_BVNULL;
+			struct berval policy_ndn = BER_BVNULL, tmp = BER_BVNULL;
 
 			if ( pr->require_password && !have_password ) {
 				goto skip;
@@ -2163,6 +2162,7 @@ ppolicy_operational( Operation *op, SlapReply *rs )
 						BER_BVZERO( &ndn );
 						goto skip;
 					}
+					tmp = ndn;
 				} else {
 					ndn = pr->group_ndn;
 				}
@@ -2171,9 +2171,9 @@ ppolicy_operational( Operation *op, SlapReply *rs )
 							pr->group_at ) ) {
 					goto skip;
 				}
-				if ( pr->group_style == ACL_STYLE_EXPAND &&
-						!BER_BVISNULL( &ndn ) ) {
-					op->o_tmpfree( ndn.bv_val, op->o_tmpmemctx );
+				if ( !BER_BVISNULL( &tmp ) ) {
+					op->o_tmpfree( tmp.bv_val, op->o_tmpmemctx );
+					BER_BVZERO( &tmp );
 				}
 			}
 
@@ -2196,7 +2196,7 @@ ppolicy_operational( Operation *op, SlapReply *rs )
 					/* did not expand to a valid dn */
 					goto skip;
 				} else {
-					freendn = 1;
+					tmp = policy_ndn;
 				}
 			} else {
 				policy_ndn = pr->policy_ndn;
@@ -2224,8 +2224,9 @@ ppolicy_operational( Operation *op, SlapReply *rs )
 				pr = NULL;
 			}
 skip:
-			if ( freendn ) {
-				op->o_tmpfree( policy_ndn.bv_val, op->o_tmpmemctx );
+			if ( !BER_BVISNULL( &tmp ) ) {
+				op->o_tmpfree( tmp.bv_val, op->o_tmpmemctx );
+				BER_BVZERO( &tmp );
 			}
 			if ( !pr ) break;
 		}
@@ -2842,7 +2843,8 @@ ppolicy_ctrls_cleanup( Operation *op, SlapReply *rs )
 		/* We only add one control */
 		if ( rs->sr_ctrls[n]->ldctl_oid == ppolicy_ctrl_oid ||
 			rs->sr_ctrls[n]->ldctl_oid == ppolicy_pwd_expired_oid ||
-			rs->sr_ctrls[n]->ldctl_oid == ppolicy_pwd_expiring_oid ) {
+			rs->sr_ctrls[n]->ldctl_oid == ppolicy_pwd_expiring_oid ||
+			rs->sr_ctrls[n]->ldctl_oid == ppolicy_account_ctrl_oid ) {
 			op->o_tmpfree( rs->sr_ctrls[n], op->o_tmpmemctx );
 			break;
 		}
@@ -2850,6 +2852,11 @@ ppolicy_ctrls_cleanup( Operation *op, SlapReply *rs )
 
 	for ( ; rs->sr_ctrls[n]; n++ ) {
 		rs->sr_ctrls[n] = rs->sr_ctrls[n+1];
+	}
+
+	if ( op->o_callback && op->o_callback->sc_cleanup == ppolicy_ctrls_cleanup ) {
+		op->o_tmpfree( op->o_callback, op->o_tmpmemctx );
+		op->o_callback = NULL;
 	}
 
 	return SLAP_CB_CONTINUE;
@@ -3332,10 +3339,11 @@ locked:
 	if ( ctrl ) {
 		slap_add_ctrl( op, rs, ctrl );
 		op->o_callback->sc_cleanup = ppolicy_ctrls_cleanup;
-	}
+	} else {
 out:
-	op->o_tmpfree( op->o_callback, op->o_tmpmemctx );
-	op->o_callback = NULL;
+		op->o_tmpfree( op->o_callback, op->o_tmpmemctx );
+		op->o_callback = NULL;
+	}
 	ldap_pvt_thread_mutex_unlock( &pi->pwdFailureTime_mutex );
 	return SLAP_CB_CONTINUE;
 }
@@ -3430,6 +3438,8 @@ ppolicy_restrict(
 	}
 
 	if ( op->o_conn && !BER_BVISEMPTY( &pwcons[op->o_conn->c_conn_idx].dn )) {
+		LDAPControl *ctrl;
+
 		/* if the current authcDN doesn't match the one we recorded,
 		 * then an intervening Bind has succeeded and the restriction
 		 * no longer applies. (ITS#4516)
@@ -3444,7 +3454,6 @@ ppolicy_restrict(
 		Debug( LDAP_DEBUG_TRACE,
 			"connection restricted to password changing only\n" );
 		if ( send_ctrl ) {
-			LDAPControl *ctrl;
 			ctrl = create_passcontrol( op, -1, -1, PP_changeAfterReset );
 			slap_add_ctrl( op, rs, ctrl );
 		}
@@ -3452,7 +3461,7 @@ ppolicy_restrict(
 		send_ldap_error( op, rs, LDAP_INSUFFICIENT_ACCESS, 
 			"Operations are restricted to bind/unbind/abandon/StartTLS/modify password" );
 		if ( send_ctrl ) {
-			ppolicy_ctrls_cleanup( op, rs );
+			op->o_tmpfree( ctrl, op->o_tmpmemctx );
 		}
 		return rs->sr_err;
 	}
@@ -3789,10 +3798,11 @@ ppolicy_add(
 			}
 			rc = check_password_quality( bv, pi, &pp, &pErr, op->ora_e, &errmsg );
 			if (rc != LDAP_SUCCESS) {
+				LDAPControl *ctrl;
 				char *txt = errmsg.bv_val;
+
 				op->o_bd->bd_info = (BackendInfo *)on->on_info;
 				if ( send_ctrl ) {
-					LDAPControl *ctrl;
 					ctrl = create_passcontrol( op, -1, -1, pErr );
 					slap_add_ctrl( op, rs, ctrl );
 				}
@@ -3801,7 +3811,7 @@ ppolicy_add(
 					free( txt );
 				}
 				if ( send_ctrl ) {
-					ppolicy_ctrls_cleanup( op, rs );
+					op->o_tmpfree( ctrl, op->o_tmpmemctx );
 				}
 				return rs->sr_err;
 			}
@@ -4671,11 +4681,12 @@ return_results:
 				1, op->o_tmpmemctx );
 
 			cb->sc_cleanup = ppolicy_ctrls_cleanup;
+			overlay_callback_after_backover( op, cb, 1 );
 
 			assert( !(rs->sr_flags & REP_CTRLS_MUSTBEFREED) );
 			rs->sr_flags |= REP_CTRLS_MUSTBEFREED;
 		} else {
-			ppolicy_ctrls_cleanup( op, rs );
+			op->o_tmpfree( ctrl, op->o_tmpmemctx );
 		}
 	}
 	return rs->sr_err;
