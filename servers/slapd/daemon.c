@@ -2962,7 +2962,7 @@ loop:
 			nwfds--;
 
 			Debug( LDAP_DEBUG_CONNS,
-				"daemon: write active on %d\n",
+				"daemon: write active on fd=%d\n",
 				wd );
 
 			/*
@@ -2990,7 +2990,7 @@ loop:
 			nrfds--;
 
 			Debug ( LDAP_DEBUG_CONNS,
-				"daemon: read activity on %d\n", rd );
+				"daemon: read activity on fd=%d\n", rd );
 			/*
 			 * NOTE: it is possible that the connection was closed
 			 * and that the stream is now inactive.
@@ -3018,38 +3018,51 @@ loop:
 	 * higher priority.
 	 */
 #ifdef LDAP_DEBUG
-		Debug( LDAP_DEBUG_CONNS, "daemon: activity on:" );
+		if ( LogTest( LDAP_DEBUG_CONNS ) ) {
+			char *ptr = ebuf;
+			int remaining = sizeof(ebuf);
 
-		for ( i = 0; i < ns; i++ ) {
-			int	r, w, fd;
+			*ptr = '\0';
+			for ( i = 0; i < ns; i++ ) {
+				int	r, w, fd;
 
-			/* Don't log listener events */
-			if ( SLAP_EVENT_IS_LISTENER( tid, i )
+				/* Don't log listener events */
+				if ( SLAP_EVENT_IS_LISTENER( tid, i )
 #ifdef LDAP_CONNECTIONLESS
-				&& !( (SLAP_EVENT_LISTENER( tid, i ))->sl_is_udp )
+					&& !( (SLAP_EVENT_LISTENER( tid, i ))->sl_is_udp )
 #endif /* LDAP_CONNECTIONLESS */
-				)
-			{
-				continue;
-			}
+					)
+				{
+					continue;
+				}
 
-			fd = SLAP_EVENT_FD( tid, i );
-			/* Don't log internal wake events */
-			if ( fd == wake_sds[tid][0] ) continue;
+				fd = SLAP_EVENT_FD( tid, i );
+				/* Don't log internal wake events */
+				if ( fd == wake_sds[tid][0] ) continue;
 
 #ifdef HAVE_KQUEUE
-			r = SLAP_EVENT_IS_READ( tid, i );
-			w = SLAP_EVENT_IS_WRITE( tid, i );
+				r = SLAP_EVENT_IS_READ( tid, i );
+				w = SLAP_EVENT_IS_WRITE( tid, i );
 #else
-			r = SLAP_EVENT_IS_READ( i );
-			w = SLAP_EVENT_IS_WRITE( i );
+				r = SLAP_EVENT_IS_READ( i );
+				w = SLAP_EVENT_IS_WRITE( i );
 #endif /* HAVE_KQUEUE */
-			if ( r || w ) {
-				Debug( LDAP_DEBUG_CONNS, " %d%s%s", fd,
-				    r ? "r" : "", w ? "w" : "" );
+				if ( r || w ) {
+					int written = snprintf( ptr, remaining, "%d%s%s ",
+						fd, r ? "r" : "", w ? "w" : "" );
+					if ( written >= remaining ) {
+						*ptr = '\0';
+						Debug( LDAP_DEBUG_CONNS, "daemon: activity on: %s\n", ebuf );
+						ptr = ebuf;
+						remaining = sizeof(ebuf);
+						written = snprintf( ptr, remaining, "%d%s%s ",
+							fd, r ? "r" : "", w ? "w" : "" );
+					}
+					remaining -= written;
+				}
 			}
+			Debug( LDAP_DEBUG_CONNS, "daemon: activity on: %s\n", ebuf );
 		}
-		Debug( LDAP_DEBUG_CONNS, "\n" );
 #endif /* LDAP_DEBUG */
 
 		for ( i = 0; i < ns; i++ ) {
@@ -3081,7 +3094,7 @@ loop:
 #endif  /* HAVE_KQUEUE */
 				{
 					Debug( LDAP_DEBUG_CONNS,
-						"daemon: write active on %d\n",
+						"daemon: write active on fd=%d\n",
 						fd );
 
 					SLAP_EVENT_CLR_WRITE( i );
@@ -3106,7 +3119,7 @@ loop:
 				{
 					r = 1;
 					Debug( LDAP_DEBUG_CONNS,
-						"daemon: read active on %d\n",
+						"daemon: read active on fd=%d\n",
 						fd );
 
 					SLAP_EVENT_CLR_READ( i );

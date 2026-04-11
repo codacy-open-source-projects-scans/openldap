@@ -189,6 +189,7 @@ get_url_perms( char **exts, mode_t *perms )
                     /* skip leading '0' */
                     if ( value[0] != '0' ) return LDAP_OTHER;
                     value++;
+                    /* fallthru */
 
                 case 3:
                     for ( j = 0; j < 3; j++ ) {
@@ -447,6 +448,7 @@ lload_configure_listener(
                 "TLS not supported (%s)\n",
                 url );
         ldap_free_urldesc( lud );
+        ch_free( l );
         return NULL;
     }
 
@@ -458,6 +460,7 @@ lload_configure_listener(
     if ( lud->lud_exts ) {
         if ( get_url_perms( lud->lud_exts, &l->sl_perms ) ) {
             ldap_free_urldesc( lud );
+            ch_free( l );
             return NULL;
         }
     } else {
@@ -469,6 +472,7 @@ lload_configure_listener(
 
     if ( lload_get_listener_addresses( l, lud, &l->sl_sockets ) ) {
         ldap_free_urldesc( lud );
+        ch_free( l );
         return NULL;
     }
     ldap_free_urldesc( lud );
@@ -620,6 +624,7 @@ skip:
         Debug( LDAP_DEBUG_ANY, "lload_configure_listener: "
                 "failed on %s\n",
                 url );
+        ch_free( l );
         return NULL;
     }
     ber_str2bv( url, 0, 1, &l->sl_url );

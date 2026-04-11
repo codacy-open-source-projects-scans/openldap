@@ -5509,7 +5509,8 @@ config_add_internal( CfBackInfo *cfb, Entry *e, ConfigArgs *ca, SlapReply *rs,
 			Debug( LDAP_DEBUG_TRACE, "%s: config_add_internal: "
 				"DN=\"%s\" no structural objectClass add function\n",
 				log_prefix, e->e_name.bv_val );
-			return LDAP_OBJECT_CLASS_VIOLATION;
+			rc = LDAP_OBJECT_CLASS_VIOLATION;
+			goto done_noop;
 		}
 	}
 
@@ -7848,9 +7849,6 @@ config_back_db_close( BackendDB *be, ConfigReply *cr )
 {
 	CfBackInfo *cfb = be->be_private;
 
-	cfb_free_entries( cfb->cb_root );
-	cfb->cb_root = NULL;
-
 	if ( cfb->cb_db.bd_info ) {
 		backend_shutdown( &cfb->cb_db );
 	}
@@ -7867,6 +7865,11 @@ static int
 config_back_db_destroy( BackendDB *be, ConfigReply *cr )
 {
 	CfBackInfo *cfb = be->be_private;
+
+	/* ITS#9909: Normally in db_close but tools don't call that and there is
+	 * currently no way to reopen this DB */
+	cfb_free_entries( cfb->cb_root );
+	cfb->cb_root = NULL;
 
 	cfb_free_cffile( cfb->cb_config );
 
