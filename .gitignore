@@ -66,8 +66,11 @@ Makefile
 /include/lber_types.h
 /include/ldap_config.h
 /include/ldap_features.h
+/include/lib*-config.h
 /include/portable.h
+/include/slapd-modules.hin
 libraries/libl*/*test
+libraries/libl*/*.map
 libraries/libl*/*.pc
 libraries/libldap/testavl
 libraries/liblunicode/ucdata.c
@@ -86,6 +89,7 @@ libraries/librewrite/version.c
 servers/slapd/.backend
 servers/slapd/all-cffiles
 servers/slapd/backends.c
+servers/slapd/modules.mk
 servers/slapd/overlays/statover.c
 servers/slapd/slapacl
 servers/slapd/slapadd
