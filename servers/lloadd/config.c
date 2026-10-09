@@ -77,8 +77,10 @@ char *slapd_args_file = NULL;
 static struct timeval timeout_api_tv, timeout_net_tv,
         timeout_write_tv = { 10, 0 };
 
-lload_features_t lload_features;
+lload_features_t lload_features = LLOAD_FEATURES_DEFAULT;
 int lload_write_coherence = 0;
+
+static lload_features_t features_requested, features_disabled;
 
 ber_len_t sockbuf_max_incoming_client = LLOAD_SB_MAX_INCOMING_CLIENT;
 ber_len_t sockbuf_max_incoming_upstream = LLOAD_SB_MAX_INCOMING_UPSTREAM;
@@ -158,6 +160,8 @@ enum {
     CFG_MAXBUF_UPSTREAM,
     CFG_MAXBUF_PENDING,
     CFG_FEATURE,
+    CFG_FEATURE_ENABLE,
+    CFG_FEATURE_DISABLE,
     CFG_THREADQS,
     CFG_TLS_ECNAME,
     CFG_TLS_CACERT,
@@ -345,7 +349,7 @@ static ConfigTable config_back_cf_table[] = {
     { "sockbuf_max_pending_client", "max", 2, 2, 0,
         ARG_BER_LEN_T|ARG_MAGIC|CFG_MAXBUF_PENDING,
         &config_generic,
-        "( OLcfgBkAt:41.1 "
+        "( OLcfgBkAt:13.41 "
             "NAME 'olcBkLloadSockbufMaxPendingClient' "
             "DESC 'The maximum amount of buffer space available per connection' "
             "EQUALITY integerMatch "
@@ -394,9 +398,24 @@ static ConfigTable config_back_cf_table[] = {
     { "feature", "name", 2, 0, 0,
         ARG_MAGIC|CFG_FEATURE,
         &config_feature,
+        NULL, NULL, NULL
+    },
+    { "enable", "name", 2, 2, 0,
+        ARG_MAGIC|CFG_FEATURE_ENABLE,
+        &config_feature,
         "( OLcfgBkAt:13.10 "
-            "NAME 'olcBkLloadFeature' "
+            "NAME ( 'olcBkLloadFeatureEnable' 'olcBkLloadFeature' ) "
             "DESC 'Lload features enabled' "
+            "EQUALITY caseIgnoreMatch "
+            "SYNTAX OMsDirectoryString )",
+        NULL, NULL
+    },
+    { "disable", "name", 2, 2, 0,
+        ARG_MAGIC|CFG_FEATURE_DISABLE,
+        &config_feature,
+        "( OLcfgBkAt:13.42 "
+            "NAME 'olcBkLloadFeatureDisable' "
+            "DESC 'Lload features disabled' "
             "EQUALITY caseIgnoreMatch "
             "SYNTAX OMsDirectoryString )",
         NULL, NULL
@@ -818,7 +837,8 @@ static ConfigOCs lloadocs[] = {
             "$ olcBkLloadSockbufMaxUpstream "
             "$ olcBkLloadMaxPDUPerCycle "
             "$ olcBkLloadIOTimeout ) "
-        "MAY ( olcBkLloadFeature "
+        "MAY ( olcBkLloadFeatureEnable "
+            "$ olcBkLloadFeatureDisable "
             "$ olcBkLloadTcpBuffer "
             "$ olcBkLloadTLSCACertificateFile "
             "$ olcBkLloadTLSCACertificatePath "
@@ -1303,7 +1323,7 @@ config_backend( ConfigArgs *c )
     b->b_tier = tier;
 
     for ( i = 1; i < c->argc; i++ ) {
-        if ( lload_backend_parse( c->argv[i], b ) ) {
+        if ( lload_backend_parse( c, c->argv[i], b ) ) {
             if ( !tier->t_type.tier_backend_config ||
                     tier->t_type.tier_backend_config( tier, b, c->argv[i] ) ) {
                 Debug( LDAP_DEBUG_ANY, "config_backend: "
@@ -1367,7 +1387,7 @@ config_bindconf( ConfigArgs *c )
     lload_change.flags.daemon |= LLOAD_DAEMON_MOD_BINDCONF;
 
     for ( i = 1; i < c->argc; i++ ) {
-        if ( lload_bindconf_parse( c->argv[i], &bindconf ) ) {
+        if ( lload_bindconf_parse( c, c->argv[i], &bindconf ) ) {
             Debug( LDAP_DEBUG_ANY, "config_bindconf: "
                     "error parsing backend configuration item '%s'\n",
                     c->argv[i] );
@@ -2092,11 +2112,24 @@ config_feature( ConfigArgs *c )
         { BER_BVC("read_pause"), LLOAD_FEATURE_PAUSE },
         { BER_BVNULL, 0 }
     };
+    lload_features_t *fp;
     slap_mask_t mask = 0;
     int i;
 
+    switch ( c->type ) {
+        case CFG_FEATURE:
+        case CFG_FEATURE_ENABLE:
+            fp = &features_requested;
+            break;
+        case CFG_FEATURE_DISABLE:
+            fp = &features_disabled;
+            break;
+        default:
+            return 1;
+    }
+
     if ( c->op == SLAP_CONFIG_EMIT ) {
-        return mask_to_verbs( features, lload_features, &c->rvalue_vals );
+        return mask_to_verbs( features, *fp, &c->rvalue_vals );
     }
 
     lload_change.type = LLOAD_CHANGE_MODIFY;
@@ -2109,11 +2142,13 @@ config_feature( ConfigArgs *c )
     if ( c->op == LDAP_MOD_DELETE ) {
         if ( !c->line ) {
             /* Last value has been deleted */
-            lload_features = 0;
+            *fp = 0;
         } else {
             i = verb_to_mask( c->line, features );
-            lload_features &= ~features[i].mask;
+            *fp &= ~features[i].mask;
         }
+        lload_features = (LLOAD_FEATURES_DEFAULT & ~features_disabled) | \
+                         features_requested;
         return 0;
     }
 
@@ -2136,7 +2171,23 @@ config_feature( ConfigArgs *c )
         }
     }
 
-    lload_features |= mask;
+    if ( features_requested & features_disabled ) {
+        lload_features_t overlap = features_requested & features_disabled;
+        for ( i = 1; i < c->argc; i++ ) {
+            int j = verb_to_mask( c->argv[i], features );
+            if ( features[j].mask & overlap ) {
+                snprintf( c->cr_msg, sizeof(c->cr_msg),
+                        "requested to both enable and disable feature %s",
+                        c->argv[i] );
+                Debug( LDAP_DEBUG_ANY, "%s: %s\n", c->log, c->cr_msg );
+            }
+        }
+        return 1;
+    }
+
+    *fp |= mask;
+    lload_features = (LLOAD_FEATURES_DEFAULT & ~features_disabled) | \
+                     features_requested;
     return 0;
 }
 
@@ -2951,6 +3002,7 @@ static slap_cf_aux_table bindkey[] = {
 
 int
 lload_cf_aux_table_parse(
+        ConfigArgs *c,
         const char *word,
         void *dst,
         slap_cf_aux_table *tab0,
@@ -2972,12 +3024,23 @@ lload_cf_aux_table_parse(
             switch ( tab->type ) {
                 case 's':
                     cptr = (char **)( (char *)dst + tab->off );
+                    if ( *cptr != NULL ) {
+dupset:
+                        if ( !c->cr_msg[0] ) {
+                            snprintf( c->cr_msg, sizeof( c->cr_msg ),
+                                    "Error: %s already set in %s", word, tabmsg );
+                            Debug( LDAP_DEBUG_ANY, "%s: %s.\n", c->log, c->cr_msg );
+                        }
+                        return 1;
+                    }
                     *cptr = ch_strdup( val );
                     rc = 0;
                     break;
 
                 case 'b':
                     bptr = (struct berval *)( (char *)dst + tab->off );
+                    if ( !BER_BVISNULL( bptr ) )
+                        goto dupset;
                     assert( tab->aux == NULL );
                     ber_str2bv( val, 0, 1, bptr );
                     rc = 0;
@@ -3330,10 +3393,10 @@ lload_bindconf_tls_set( slap_bindconf *bc, LDAP *ld )
 #endif
 
 int
-lload_bindconf_tls_parse( const char *word, slap_bindconf *bc )
+lload_bindconf_tls_parse( ConfigArgs *c, const char *word, slap_bindconf *bc )
 {
 #ifdef HAVE_TLS
-    if ( lload_cf_aux_table_parse( word, bc, aux_TLS, "tls config" ) == 0 ) {
+    if ( lload_cf_aux_table_parse( c, word, bc, aux_TLS, "tls config" ) == 0 ) {
         bc->sb_tls_do_init = 1;
         return 0;
     }
@@ -3342,21 +3405,21 @@ lload_bindconf_tls_parse( const char *word, slap_bindconf *bc )
 }
 
 int
-lload_backend_parse( const char *word, LloadBackend *b )
+lload_backend_parse( ConfigArgs *c, const char *word, LloadBackend *b )
 {
-    return lload_cf_aux_table_parse( word, b, backendkey, "backend config" );
+    return lload_cf_aux_table_parse( c, word, b, backendkey, "backend config" );
 }
 
 int
-lload_bindconf_parse( const char *word, slap_bindconf *bc )
+lload_bindconf_parse( ConfigArgs *c, const char *word, slap_bindconf *bc )
 {
 #ifdef HAVE_TLS
     /* Detect TLS config changes explicitly */
-    if ( lload_bindconf_tls_parse( word, bc ) == 0 ) {
+    if ( lload_bindconf_tls_parse( c, word, bc ) == 0 ) {
         return 0;
     }
 #endif
-    return lload_cf_aux_table_parse( word, bc, bindkey, "bind config" );
+    return lload_cf_aux_table_parse( c, word, bc, bindkey, "bind config" );
 }
 
 int

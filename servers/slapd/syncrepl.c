@@ -1995,7 +1995,7 @@ result_done:
 					syncUUIDs = NULL;
 					rc = ber_scanf( ber, "[W]", &syncUUIDs );
 					ber_scanf( ber, /*"{"*/ "}" );
-					if ( rc != LBER_ERROR ) {
+					if ( rc != LBER_ERROR && syncUUIDs ) {
 						if ( refreshDeletes ) {
 							syncrepl_del_nonpresent( op, si, syncUUIDs,
 								&syncCookie, m );
@@ -4146,6 +4146,10 @@ presentlist_insert(
 {
 	char *val;
 
+	if ( syncUUID->bv_len != UUIDLEN ) {
+		return 1;
+	}
+
 #ifdef HASHUUID
 	Avlnode **av;
 	unsigned short s;
@@ -4785,7 +4789,9 @@ retry_add:;
 			op->o_bd = si->si_wbe;
 retry_modrdn:;
 			rs_reinit( &rs_modify, REP_RESULT );
+			op->orm_no_opattrs = 1;
 			rc = op->o_bd->be_modrdn( op, &rs_modify );
+			op->orm_no_opattrs = 0;
 
 			/* NOTE: noSuchObject should result because the new superior
 			 * has not been added yet (ITS#6472) */
@@ -6124,8 +6130,8 @@ dn_callback(
 									old->a_vals[0].bv_val );
 								return LDAP_SUCCESS;
 							}
-							memcpy( dni->oldcsn, old->a_vals[0].bv_val,
-									old->a_vals[0].bv_len+1 );
+							memcpy( dni->oldcsn, old->a_nvals[0].bv_val,
+									old->a_nvals[0].bv_len+1 );
 						}
 					}
 
@@ -7163,13 +7169,15 @@ parse_syncrepl_line(
 					STRLENOF( LAZY_COMMIT ) ) )
 		{
 			si->si_lazyCommit = 1;
-		} else if ( !bindconf_parse( c->argv[i], &si->si_bindconf ) ) {
+		} else if ( !bindconf_parse( c, c->argv[i], &si->si_bindconf ) ) {
 			si->si_got |= GOT_BINDCONF;
 		} else {
-			snprintf( c->cr_msg, sizeof( c->cr_msg ),
-				"Error: parse_syncrepl_line: "
-				"unable to parse \"%s\"\n", c->argv[ i ] );
-			Debug( LDAP_DEBUG_ANY, "%s: %s.\n", c->log, c->cr_msg );
+			if ( !c->cr_msg[0] ) {
+				snprintf( c->cr_msg, sizeof( c->cr_msg ),
+					"Error: parse_syncrepl_line: "
+					"unable to parse \"%s\"\n", c->argv[ i ] );
+				Debug( LDAP_DEBUG_ANY, "%s: %s.\n", c->log, c->cr_msg );
+			}
 			return -1;
 		}
 	}
@@ -8019,7 +8027,7 @@ syncrepl_config( ConfigArgs *c )
 					 * happen when running on the cn=config DB.
 					 */
 					if ( si->si_re ) {
-						if ( si->si_be == c->ca_op->o_bd ||
+						if ( si->si_be == c->ca_op->o_bd->bd_self ||
 								ldap_pvt_thread_mutex_trylock( &si->si_mutex )) {
 							isrunning = 1;
 						} else {

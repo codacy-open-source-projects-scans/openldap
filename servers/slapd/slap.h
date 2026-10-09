@@ -1221,6 +1221,8 @@ struct Entry {
 	/* for use by the backend for any purpose */
 	void*	e_private;
 };
+#define SLAP_ENTRY_SCHEMA_CHECK 0x0001
+#define SLAP_ENTRY_SKIP_DYNAMIC 0x0002
 
 /*
  * A list of LDAPMods
@@ -1311,6 +1313,70 @@ typedef enum slap_style_e {
 
 	ACL_STYLE_NONE
 } slap_style_t;
+
+/*
+ * Operation indices
+ */
+typedef enum {
+	SLAP_OP_BIND = 0,
+	SLAP_OP_UNBIND,
+	SLAP_OP_SEARCH,
+	SLAP_OP_COMPARE,
+	SLAP_OP_MODIFY,
+	SLAP_OP_MODRDN,
+	SLAP_OP_RENAME = SLAP_OP_MODRDN,
+	SLAP_OP_ADD,
+	SLAP_OP_DELETE,
+	SLAP_OP_ABANDON,
+	SLAP_OP_EXTENDED,
+	SLAP_OP_LAST
+} slap_op_t;
+
+typedef enum {
+	SLAP_RESTRICT_OP_BIND = 1 << SLAP_OP_BIND,
+	SLAP_RESTRICT_OP_UNBIND = 1 << SLAP_OP_UNBIND,
+	SLAP_RESTRICT_OP_SEARCH = 1 << SLAP_OP_SEARCH,
+	SLAP_RESTRICT_OP_COMPARE = 1 << SLAP_OP_COMPARE,
+	SLAP_RESTRICT_OP_MODIFY = 1 << SLAP_OP_MODIFY,
+	SLAP_RESTRICT_OP_MODRDN = 1 << SLAP_OP_MODRDN,
+	SLAP_RESTRICT_OP_RENAME = SLAP_RESTRICT_OP_MODRDN,
+	SLAP_RESTRICT_OP_ADD = 1 << SLAP_OP_ADD,
+	SLAP_RESTRICT_OP_DELETE = 1 << SLAP_OP_DELETE,
+	SLAP_RESTRICT_OP_ABANDON = 1 << SLAP_OP_ABANDON,
+	SLAP_RESTRICT_OP_EXTENDED = 1 << SLAP_OP_EXTENDED,
+	SLAP_RESTRICT_OP_MASK = (1 << SLAP_OP_LAST) - 1,
+	/* Make sure 1 << SLAP_OP_LAST stays unused! */
+
+	SLAP_RESTRICT_OP_READS = (
+			SLAP_RESTRICT_OP_COMPARE |
+			SLAP_RESTRICT_OP_SEARCH ),
+	SLAP_RESTRICT_OP_WRITES = (
+			SLAP_RESTRICT_OP_ADD |
+			SLAP_RESTRICT_OP_DELETE |
+			SLAP_RESTRICT_OP_MODIFY |
+			SLAP_RESTRICT_OP_RENAME ),
+	SLAP_RESTRICT_OP_ALL = (
+			SLAP_RESTRICT_OP_READS |
+			SLAP_RESTRICT_OP_WRITES |
+			SLAP_RESTRICT_OP_BIND |
+			SLAP_RESTRICT_OP_EXTENDED ),
+
+	SLAP_RESTRICT_EXOP_START_TLS = 0x0100U,
+	SLAP_RESTRICT_EXOP_MODIFY_PASSWD = 0x0200U,
+	SLAP_RESTRICT_EXOP_WHOAMI = 0x0400U,
+	SLAP_RESTRICT_EXOP_CANCEL = 0x0800U,
+	SLAP_RESTRICT_EXOP_MASK = 0xFF00U,
+
+	SLAP_RESTRICT_READONLY = 0x80000000U,
+} slap_restrictop_t;
+#define SLAP_OP2RESTRICT(op)   ((slap_restrictop_t)1U << (op))
+
+typedef enum slap_restrict_action_e {
+	SLAP_RESTRICT_OP_MISSING = 0,
+	SLAP_RESTRICT_OP_ALLOW,
+	SLAP_RESTRICT_OP_REJECT,
+	SLAP_RESTRICT_OP_DROP
+} slap_restrict_action_t;
 
 typedef struct AuthorizationInformation {
 	ber_tag_t	sai_method;			/* LDAP_AUTH_* from <ldap.h> */
@@ -1539,6 +1605,8 @@ typedef struct Access {
 	ObjectClass		*a_group_oc;
 	AttributeDescription	*a_group_at;
 
+	struct berval	a_comment;
+
 	struct Access		*a_next;
 } Access;
 
@@ -1554,6 +1622,13 @@ typedef struct AccessControl {
 	slap_style_t	acl_attrval_style;
 	regex_t		acl_attrval_re;
 	struct berval	acl_attrval;
+	slap_restrictop_t	acl_op;
+	struct berval	acl_oid;
+	int		acl_control;
+
+	/* Preserved op= and control= parts as configured */
+	struct berval	acl_opval;
+	struct berval	acl_controlval;
 
 	/* "by" part: list of who has what access to the entries */
 	Access	*acl_access;
@@ -1590,6 +1665,28 @@ typedef struct AclRegexMatches {
 	int val_count;
         regmatch_t val_data[MAXREMATCHES];
 } AclRegexMatches;
+
+typedef struct RestrictOpBy {
+	Access rb_a;
+	slap_restrict_action_t rb_action;
+
+	int		rb_drop_cid;
+	struct berval	rb_drop_oid;
+
+	struct RestrictOpBy	*rb_next;
+} RestrictOpBy;
+
+typedef struct RestrictOp {
+	slap_restrictop_t	r_ops;
+	struct berval		r_exop_oid, r_exop_orig;
+
+	int			*r_control_cids;
+	BerVarray		r_control_orig;
+	int			r_ncontrols;
+
+	RestrictOpBy		*r_by;
+	struct RestrictOp	*r_next;
+} RestrictOp;
 
 /*
  * Backend-info
@@ -1935,38 +2032,7 @@ struct BackendDB {
 #define SLAP_SYNC_SUBENTRY(be)			(SLAP_DBFLAGS(be) & SLAP_DBFLAG_SYNC_SUBENTRY)
 #define SLAP_LASTBIND_ASSERT(be)		(SLAP_DBFLAGS(be) & SLAP_DBFLAG_LASTBIND_ASSERT)
 
-	slap_mask_t	be_restrictops;		/* restriction operations */
-#define SLAP_RESTRICT_OP_ADD		0x0001U
-#define	SLAP_RESTRICT_OP_BIND		0x0002U
-#define SLAP_RESTRICT_OP_COMPARE	0x0004U
-#define SLAP_RESTRICT_OP_DELETE		0x0008U
-#define	SLAP_RESTRICT_OP_EXTENDED	0x0010U
-#define SLAP_RESTRICT_OP_MODIFY		0x0020U
-#define SLAP_RESTRICT_OP_RENAME		0x0040U
-#define SLAP_RESTRICT_OP_SEARCH		0x0080U
-#define SLAP_RESTRICT_OP_MASK		0x00FFU
-
-#define	SLAP_RESTRICT_READONLY		0x80000000U
-
-#define SLAP_RESTRICT_EXOP_START_TLS		0x0100U
-#define	SLAP_RESTRICT_EXOP_MODIFY_PASSWD	0x0200U
-#define SLAP_RESTRICT_EXOP_WHOAMI		0x0400U
-#define SLAP_RESTRICT_EXOP_CANCEL		0x0800U
-#define SLAP_RESTRICT_EXOP_MASK			0xFF00U
-
-#define SLAP_RESTRICT_OP_READS	\
-	( SLAP_RESTRICT_OP_COMPARE	\
-	| SLAP_RESTRICT_OP_SEARCH )
-#define SLAP_RESTRICT_OP_WRITES	\
-	( SLAP_RESTRICT_OP_ADD    \
-	| SLAP_RESTRICT_OP_DELETE \
-	| SLAP_RESTRICT_OP_MODIFY \
-	| SLAP_RESTRICT_OP_RENAME )
-#define SLAP_RESTRICT_OP_ALL \
-	( SLAP_RESTRICT_OP_READS \
-	| SLAP_RESTRICT_OP_WRITES \
-	| SLAP_RESTRICT_OP_BIND \
-	| SLAP_RESTRICT_OP_EXTENDED )
+	slap_restrictop_t	be_restrictops;		/* restriction operations */
 
 #define SLAP_ALLOW_BIND_V2		0x0001U	/* LDAPv2 bind */
 #define SLAP_ALLOW_BIND_ANON_CRED	0x0002U /* cred should be empty */
@@ -1992,6 +2058,7 @@ struct BackendDB {
 #define SLAP_REQUIRE_AUTHC		0x0004U	/* authentication before op */
 #define SLAP_REQUIRE_SASL		0x0008U	/* SASL before op  */
 #define SLAP_REQUIRE_STRONG		0x0010U	/* strong authentication before op */
+#define SLAP_REQUIRE_NONE		0x8000U	/* do not inherit require from frontend */
 
 	/* Required Security Strength Factor */
 	slap_ssf_set_t be_ssf_set;
@@ -2011,6 +2078,7 @@ struct BackendDB {
 	AccessControl *be_acl;	/* access control list for this backend	   */
 	slap_access_t	be_dfltaccess;	/* access given if no acl matches	   */
 	AttributeName	*be_extra_anlist;	/* attributes that need to be added to search requests (ITS#6513) */
+	RestrictOp *be_restrictop_rules; /* control and (ext)op filtering */
 
 	unsigned int be_lastbind_precision;
 
@@ -2562,23 +2630,6 @@ struct slap_control_ids {
 #endif
 };
 
-/*
- * Operation indices
- */
-typedef enum {
-	SLAP_OP_BIND = 0,
-	SLAP_OP_UNBIND,
-	SLAP_OP_SEARCH,
-	SLAP_OP_COMPARE,
-	SLAP_OP_MODIFY,
-	SLAP_OP_MODRDN,
-	SLAP_OP_ADD,
-	SLAP_OP_DELETE,
-	SLAP_OP_ABANDON,
-	SLAP_OP_EXTENDED,
-	SLAP_OP_LAST
-} slap_op_t;
-
 typedef struct slap_counters_t {
 	struct slap_counters_t	*sc_next;
 	ldap_pvt_thread_mutex_t	sc_mutex;
@@ -2772,75 +2823,99 @@ struct Operation {
 
 #define o_dontUseCopy			o_ctrlflag[slap_cids.sc_dontUseCopy]
 #define get_dontUseCopy(op)		_SCM((op)->o_dontUseCopy)
+#define wants_dontUseCopy(op)		(_SCM((op)->o_dontUseCopy) > SLAP_CONTROL_IGNORED)
 
 #define o_relax				o_ctrlflag[slap_cids.sc_relax]
 #define get_relax(op)		_SCM((op)->o_relax)
+#define wants_relax(op)		(_SCM((op)->o_relax) > SLAP_CONTROL_IGNORED)
 
 #define o_managedsait	o_ctrlflag[slap_cids.sc_manageDSAit]
 #define get_manageDSAit(op)				_SCM((op)->o_managedsait)
+#define wants_manageDSAit(op)				(_SCM((op)->o_managedsait) > SLAP_CONTROL_IGNORED)
 
 #define o_noop	o_ctrlflag[slap_cids.sc_noOp]
-#define o_proxy_authz	o_ctrlflag[slap_cids.sc_proxyAuthz]
-#define o_subentries	o_ctrlflag[slap_cids.sc_subentries]
+#define wants_noop(op)	(_SCM((op)->o_noop) > SLAP_CONTROL_IGNORED)
 
+#define o_proxy_authz	o_ctrlflag[slap_cids.sc_proxyAuthz]
+#define wants_proxy_authz(op)	(_SCM((op)->o_proxy_authz) > SLAP_CONTROL_IGNORED)
+
+#define o_subentries	o_ctrlflag[slap_cids.sc_subentries]
 #define get_subentries(op)				_SCM((op)->o_subentries)
+#define wants_subentries(op)				(_SCM((op)->o_subentries) > SLAP_CONTROL_IGNORED)
 #define	o_subentries_visibility	o_ctrlflag[slap_cids.sc_subentries]
 
 #define set_subentries_visibility(op)	((op)->o_subentries |= SLAP_CONTROL_DATA0)
 #define get_subentries_visibility(op)	(((op)->o_subentries & SLAP_CONTROL_DATA0) != 0)
 
 #define o_assert	o_ctrlflag[slap_cids.sc_assert]
-#define get_assert(op)					((int)(op)->o_assert)
+#define get_assert(op)					_SCM((op)->o_assert)
+#define wants_assert(op)				(_SCM((op)->o_assert) > SLAP_CONTROL_IGNORED)
 #define o_assertion	o_controls[slap_cids.sc_assert]
 #define get_assertion(op)				((op)->o_assertion)
 
 #define	o_valuesreturnfilter	o_ctrlflag[slap_cids.sc_valuesReturnFilter]
+#define wants_valuesreturnfilter(op)	(_SCM((op)->o_valuesreturnfilter) > SLAP_CONTROL_IGNORED)
 #define o_vrFilter	o_controls[slap_cids.sc_valuesReturnFilter]
 
 #define o_permissive_modify	o_ctrlflag[slap_cids.sc_permissiveModify]
-#define get_permissiveModify(op)		((int)(op)->o_permissive_modify)
+#define get_permissiveModify(op)		_SCM((op)->o_permissive_modify)
+#define wants_permissiveModify(op)		(_SCM((op)->o_permissive_modify) > SLAP_CONTROL_IGNORED)
 
 #define o_domain_scope	o_ctrlflag[slap_cids.sc_domainScope]
-#define get_domainScope(op)				((int)(op)->o_domain_scope)
+#define get_domainScope(op)				_SCM((op)->o_domain_scope)
+#define wants_domainScope(op)				(_SCM((op)->o_domain_scope) > SLAP_CONTROL_IGNORED)
 
 #ifdef SLAP_CONTROL_X_TREE_DELETE
 #define	o_tree_delete	o_ctrlflag[slap_cids.sc_treeDelete]
-#define get_treeDelete(op)				((int)(op)->o_tree_delete)
+#define get_treeDelete(op)				_SCM((op)->o_tree_delete)
+#define wants_treeDelete(op)				(_SCM((op)->o_tree_delete) > SLAP_CONTROL_IGNORED)
 #endif
 
 #define o_preread	o_ctrlflag[slap_cids.sc_preRead]
+#define get_preread(op)	_SCM((op)->o_preread)
+#define wants_preread(op)	(_SCM((op)->o_preread) > SLAP_CONTROL_IGNORED)
+
 #define o_postread	o_ctrlflag[slap_cids.sc_postRead]
+#define get_postread(op)	_SCM((op)->o_postread)
+#define wants_postread(op)	(_SCM((op)->o_postread) > SLAP_CONTROL_IGNORED)
 
 #define	o_preread_attrs	o_controls[slap_cids.sc_preRead]
 #define o_postread_attrs	o_controls[slap_cids.sc_postRead]
 
 #define o_pagedresults	o_ctrlflag[slap_cids.sc_pagedResults]
 #define o_pagedresults_state	o_controls[slap_cids.sc_pagedResults]
-#define get_pagedresults(op)			((int)(op)->o_pagedresults)
+#define get_pagedresults(op)			_SCM((op)->o_pagedresults)
+#define wants_pagedresults(op)			(_SCM((op)->o_pagedresults) > SLAP_CONTROL_IGNORED)
 
 #ifdef SLAP_CONTROL_X_SORTEDRESULTS
 #define o_sortedresults		o_ctrlflag[slap_cids.sc_sortedResults]
+#define wants_sortedresults(op)	(_SCM((op)->o_sortedresults) > SLAP_CONTROL_IGNORED)
 #endif
 
 #define o_txnSpec		o_ctrlflag[slap_cids.sc_txnSpec]
+#define wants_txnSpec(op)		(_SCM((op)->o_txnSpec) > SLAP_CONTROL_IGNORED)
 
 #ifdef SLAP_CONTROL_X_SESSION_TRACKING
 #define o_session_tracking	o_ctrlflag[slap_cids.sc_sessionTracking]
 #define o_tracked_sessions	o_controls[slap_cids.sc_sessionTracking]
-#define get_sessionTracking(op)			((int)(op)->o_session_tracking)
+#define get_sessionTracking(op)			_SCM((op)->o_session_tracking)
+#define wants_sessionTracking(op)			(_SCM((op)->o_session_tracking) > SLAP_CONTROL_IGNORED)
 #endif
 
 #ifdef SLAP_CONTROL_X_WHATFAILED
 #define o_whatFailed o_ctrlflag[slap_cids.sc_whatFailed]
 #define get_whatFailed(op)				_SCM((op)->o_whatFailed)
+#define wants_whatFailed(op)				(_SCM((op)->o_whatFailed) > SLAP_CONTROL_IGNORED)
 #endif
 
 #ifdef SLAP_CONTROL_X_LAZY_COMMIT
 #define o_lazyCommit o_ctrlflag[slap_cids.sc_lazyCommit]
 #define get_lazyCommit(op)				_SCM((op)->o_lazyCommit)
+#define wants_lazyCommit(op)				(_SCM((op)->o_lazyCommit) > SLAP_CONTROL_IGNORED)
 #endif
 
 #define o_sync			o_ctrlflag[slap_cids.sc_LDAPsync]
+#define wants_sync(op)		(_SCM((op)->o_sync) > SLAP_CONTROL_IGNORED)
 
 	AuthorizationInformation o_authz;
 

@@ -334,7 +334,7 @@ rwm_op_add( Operation *op, SlapReply *rs )
 				}
 			}
 
-		} else if ( !isupdate && !get_relax( op ) && (*ap)->a_desc->ad_type->sat_no_user_mod )
+		} else if ( !isupdate && !wants_relax( op ) && (*ap)->a_desc->ad_type->sat_no_user_mod )
 		{
 			goto next_attr;
 
@@ -592,7 +592,7 @@ rwm_op_modify( Operation *op, SlapReply *rs )
 		{
 			is_oc = 1;
 
-		} else if ( !isupdate && !get_relax( op ) && ml->sml_desc->ad_type->sat_no_user_mod  )
+		} else if ( !isupdate && !wants_relax( op ) && ml->sml_desc->ad_type->sat_no_user_mod  )
 		{
 			ml = ch_malloc( sizeof( Modifications ) );
 			*ml = **mlp;
@@ -1351,7 +1351,7 @@ rwm_attrs( Operation *op, SlapReply *rs, Attribute** a_first, int stripEntryDN )
 			}
 			
 		} else if ( !isupdate
-			&& !get_relax( op )
+			&& !wants_relax( op )
 			&& (*ap)->a_desc->ad_type->sat_no_user_mod 
 			&& (*ap)->a_desc->ad_type != slap_schema.si_at_undefined )
 		{
@@ -1628,7 +1628,7 @@ rwm_operational( Operation *op, SlapReply *rs )
 	 * so we need to select those attributes we are willing
 	 * to return, and remap them accordingly */
 	if ( rs->sr_operational_attrs ) {
-		rwm_attrs( op, rs, &rs->sr_operational_attrs, 1 );
+		rwm_attrs( op, rs, &rs->sr_operational_attrs, 0 );
 	}
 
 	return SLAP_CB_CONTINUE;

@@ -6,7 +6,7 @@
 # Preamble for all OpenLDAP SDF documents
 #
 
-!default VERSION 2.X
+!default VERSION "2.X"
 
 #
 # Paths are relative to the main subdirectories
@@ -141,7 +141,6 @@ OpenLDAP FAQ|https://www.openldap.org/faq/
 OpenLDAP ITS|https://bugs.openldap.org/
 OpenLDAP Software|https://www.openldap.org/software/
 OpenSSL|https://www.openssl.org/
-Perl|https://www.perl.org/
 SDF|https://metacpan.org/release/sdf
 UMLDAP|https://web.archive.org/web/20160302011357/http://www.umich.edu/~dirsvcs/ldap/ldap.html
 !endblock

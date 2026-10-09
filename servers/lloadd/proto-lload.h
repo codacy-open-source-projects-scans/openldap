@@ -80,8 +80,12 @@ LDAP_SLAPD_F (void) lload_config_destroy( void );
 LDAP_SLAPD_F (int) verb_to_mask( const char *word, slap_verbmasks *v );
 LDAP_SLAPD_F (int) lload_tls_get_config( LDAP *ld, int opt, char **val );
 LDAP_SLAPD_F (void) lload_bindconf_tls_defaults( slap_bindconf *bc );
-LDAP_SLAPD_F (int) lload_backend_parse( const char *word, LloadBackend *b );
-LDAP_SLAPD_F (int) lload_bindconf_parse( const char *word, slap_bindconf *bc );
+LDAP_SLAPD_F (int) lload_backend_parse( struct config_args_s *c,
+        const char *word,
+        LloadBackend *b );
+LDAP_SLAPD_F (int) lload_bindconf_parse( struct config_args_s *c,
+        const char *word,
+        slap_bindconf *bc );
 LDAP_SLAPD_F (int) lload_bindconf_unparse( slap_bindconf *bc, struct berval *bv );
 LDAP_SLAPD_F (int) lload_bindconf_tls_set( slap_bindconf *bc, LDAP *ld );
 LDAP_SLAPD_F (void) lload_bindconf_free( slap_bindconf *bc );
@@ -116,6 +120,7 @@ LDAP_SLAPD_F (void) connections_walk( ldap_pvt_thread_mutex_t *cq_mutex, lload_c
 LDAP_SLAPD_F (LloadListener *) lload_configure_listener( const char *url, LDAPURLDesc *lud );
 LDAP_SLAPD_F (int) lload_open_new_listener( LloadListener *lr );
 LDAP_SLAPD_F (int) lloadd_listeners_init( const char *urls );
+LDAP_SLAPD_F (void) lloadd_listeners_destroy( void );
 LDAP_SLAPD_F (int) lloadd_daemon_destroy( void );
 LDAP_SLAPD_F (int) lloadd_daemon( struct event_base *daemon_base );
 LDAP_SLAPD_F (LloadListener **) lloadd_get_listeners( void );

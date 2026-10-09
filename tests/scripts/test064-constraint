@@ -88,6 +88,7 @@ olcSuffix: $BASEDN
 olcRootDN: $MANAGERDN
 olcRootPW: $PASSWD
 olcDbDirectory: $TESTDIR/db.1.a
+olcAccess: to * by users write by * read
 EOF
 
 if [ "$INDEXDB" = indexdb ]; then
@@ -263,6 +264,6 @@ test $KILLSERVERS != no && kill -HUP $PID
 
 echo ">>>>> Test succeeded"
 
-test $KILLSERVERS != no && wait
+test $KILLSERVERS != no && { wait $KILLPIDS || exit $?; }
 
 exit 0

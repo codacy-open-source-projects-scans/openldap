@@ -198,8 +198,8 @@ tlso_ca_list( char * bundle, char * dir, X509 *cert, STACK_OF(X509_NAME) *ca_lis
 		ldap_charray_free( dirs );
 	}
 	if ( cert ) {
-		X509_NAME *xn = X509_get_subject_name( cert );
-		xn = X509_NAME_dup( xn );
+		const X509_NAME *cxn = X509_get_subject_name( cert );
+		X509_NAME *xn = X509_NAME_dup( cxn );
 		if ( xn && ca_list ) {
 			sk_X509_NAME_push( ca_list, xn );
 		}
@@ -543,7 +543,7 @@ tlso_ctx_init( struct ldapoptions *lo, struct ldaptls *lt, int is_server, char *
 
 				while ((info = OSSL_STORE_load( sctx ))) {
 					switch (OSSL_STORE_INFO_get_type( info )) {
-					case OSSL_STORE_INFO_CERT:
+					case OSSL_STORE_INFO_CERT:	{
 						X509 *cert = OSSL_STORE_INFO_get0_CERT( info );
 						X509_STORE *store = SSL_CTX_get_cert_store( ctx );
 						if ( !X509_STORE_add_cert( store, cert ) ) {
@@ -557,7 +557,7 @@ tlso_ctx_init( struct ldapoptions *lo, struct ldaptls *lt, int is_server, char *
 						if ( is_server ) {
 							STACK_OF(X509_NAME) *ca_list = SSL_CTX_get_client_CA_list( ctx );
 							if ( ca_list ) {
-								X509_NAME *xn = X509_get_subject_name( cert );
+								X509_NAME *xn = (X509_NAME *)X509_get_subject_name( cert );
 								if ( xn )
 									xn = X509_NAME_dup( xn );
 								if ( xn )
@@ -565,6 +565,7 @@ tlso_ctx_init( struct ldapoptions *lo, struct ldaptls *lt, int is_server, char *
 							}
 						}
 						break;
+					}
 					default:
 						/* ignore other types */
 						break;
@@ -753,7 +754,7 @@ tlso_ctx_init( struct ldapoptions *lo, struct ldaptls *lt, int is_server, char *
 						return -1;
 					}
 					break;
-				case OSSL_STORE_INFO_CERT:
+				case OSSL_STORE_INFO_CERT:	{
 					X509 *cert = OSSL_STORE_INFO_get0_CERT(info);
 					int is_ca = X509_check_ca( cert );
 					if ( !is_ca && !SSL_CTX_use_certificate( ctx, cert )) {
@@ -773,7 +774,8 @@ tlso_ctx_init( struct ldapoptions *lo, struct ldaptls *lt, int is_server, char *
 						return -1;
 					}
 					break;
-				case OSSL_STORE_INFO_CRL:
+					}
+				case OSSL_STORE_INFO_CRL:	{
 					X509_STORE *x509_s = SSL_CTX_get_cert_store( ctx );
 					if ( !X509_STORE_add_crl( x509_s,
 							OSSL_STORE_INFO_get0_CRL(info) )) {
@@ -785,6 +787,7 @@ tlso_ctx_init( struct ldapoptions *lo, struct ldaptls *lt, int is_server, char *
 						return -1;
 					}
 					break;
+					}
 				default:
 					/* ignore other types */
 					break;
@@ -862,6 +865,7 @@ tlso_session_connect( LDAP *ld, tls_session *sess, const char *name_in )
 			return -1;
 	}
 #endif
+	ERR_clear_error();
 	/* Caller expects 0 = success, OpenSSL returns 1 = success */
 	rc = SSL_connect( s ) - 1;
 	return rc;
@@ -873,6 +877,7 @@ tlso_session_accept( tls_session *sess )
 	tlso_session *s = (tlso_session *)sess;
 
 	/* Caller expects 0 = success, OpenSSL returns 1 = success */
+	ERR_clear_error();
 	return SSL_accept( s ) - 1;
 }
 
@@ -924,7 +929,7 @@ tlso_session_my_dn( tls_session *sess, struct berval *der_dn )
 {
 	tlso_session *s = (tlso_session *)sess;
 	X509 *x;
-	X509_NAME *xn;
+	const X509_NAME *xn;
 
 	x = SSL_get_certificate( s );
 
@@ -961,7 +966,7 @@ tlso_session_peer_dn( tls_session *sess, struct berval *der_dn )
 {
 	tlso_session *s = (tlso_session *)sess;
 	X509 *x = tlso_get_cert( s );
-	X509_NAME *xn;
+	const X509_NAME *xn;
 
 	if ( !x )
 		return LDAP_INVALID_CREDENTIALS;
@@ -1040,7 +1045,7 @@ tlso_session_chkhost( LDAP *ld, tls_session *sess, const char *name_in )
 		X509_EXTENSION *ex;
 		STACK_OF(GENERAL_NAME) *alt;
 
-		ex = X509_get_ext(x, i);
+		ex = (X509_EXTENSION *)X509_get_ext(x, i);
 		alt = X509V3_EXT_d2i(ex);
 		if (alt) {
 			int n, len2 = 0;
@@ -1143,10 +1148,10 @@ tlso_session_chkhost( LDAP *ld, tls_session *sess, const char *name_in )
 	}
 
 	if (ret != LDAP_SUCCESS) {
-		X509_NAME *xn;
-		X509_NAME_ENTRY *ne;
+		const X509_NAME *xn;
+		const X509_NAME_ENTRY *ne;
 		ASN1_OBJECT *obj;
-		ASN1_STRING *cn = NULL;
+		const ASN1_STRING *cn = NULL;
 		char *cnstr;
 		int cnlen;
 		int navas;
@@ -1620,17 +1625,22 @@ tlso_sb_read( Sockbuf_IO_Desc *sbiod, void *buf, ber_len_t len)
 
 	p = (struct tls_data *)sbiod->sbiod_pvt;
 
+	ERR_clear_error();
 	ret = SSL_read( p->session, (char *)buf, len );
 #ifdef HAVE_WINSOCK
 	errno = WSAGetLastError();
 #endif
 	err = SSL_get_error( p->session, ret );
+
+	sbiod->sbiod_sb->sb_trans_needs_read = 0;
+	sbiod->sbiod_sb->sb_trans_needs_write = 0;
 	if (err == SSL_ERROR_WANT_READ ) {
 		sbiod->sbiod_sb->sb_trans_needs_read = 1;
 		sock_errset(EWOULDBLOCK);
+	} else if ( err == SSL_ERROR_WANT_WRITE ) {
+		sbiod->sbiod_sb->sb_trans_needs_write = 1;
+		sock_errset(EWOULDBLOCK);
 	}
-	else
-		sbiod->sbiod_sb->sb_trans_needs_read = 0;
 	return ret;
 }
 
@@ -1646,17 +1656,21 @@ tlso_sb_write( Sockbuf_IO_Desc *sbiod, void *buf, ber_len_t len)
 
 	p = (struct tls_data *)sbiod->sbiod_pvt;
 
+	ERR_clear_error();
 	ret = SSL_write( p->session, (char *)buf, len );
 #ifdef HAVE_WINSOCK
 	errno = WSAGetLastError();
 #endif
 	err = SSL_get_error( p->session, ret );
+
+	sbiod->sbiod_sb->sb_trans_needs_read = 0;
+	sbiod->sbiod_sb->sb_trans_needs_write = 0;
 	if (err == SSL_ERROR_WANT_WRITE ) {
 		sbiod->sbiod_sb->sb_trans_needs_write = 1;
 		sock_errset(EWOULDBLOCK);
-
-	} else {
-		sbiod->sbiod_sb->sb_trans_needs_write = 0;
+	} else if ( err == SSL_ERROR_WANT_READ ) {
+		sbiod->sbiod_sb->sb_trans_needs_read = 1;
+		sock_errset(EWOULDBLOCK);
 	}
 	return ret;
 }
@@ -1742,8 +1756,8 @@ tlso_verify_cb( int ok, X509_STORE_CTX *ctx )
 	X509 *cert;
 	int errnum;
 	int errdepth;
-	X509_NAME *subject;
-	X509_NAME *issuer;
+	const X509_NAME *subject;
+	const X509_NAME *issuer;
 	char *sname;
 	char *iname;
 	char *certerr = NULL;

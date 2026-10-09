@@ -15,7 +15,11 @@
 
 umask 077
 
-TESTWD=`pwd`
+OS_WINDOWS=${AC_OS_WINDOWS-no}
+case "$OS_WINDOWS" in
+yes)	TESTWD=`pwd -W` ;;
+*)	TESTWD=`pwd` ;;
+esac
 
 if [ -z "$STARTTIME" ]; then
     STARTTIME=$(date +%s)
@@ -77,8 +81,6 @@ SLEEP0=${SLEEP0-1}
 SLEEP1=${SLEEP1-7}
 SLEEP2=${SLEEP2-15}
 TIMEOUT=${TIMEOUT-8}
-
-OS_WINDOWS=${AC_OS_WINDOWS-no}
 
 # dirs
 PROGDIR="$OBJDIR/tests/progs"

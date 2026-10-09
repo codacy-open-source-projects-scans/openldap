@@ -126,6 +126,17 @@ mdb_db_open( BackendDB *be, ConfigReply *cr )
 		goto fail;
 	}
 
+	if ( mdb->mi_pagesize ) {
+		rc = mdb_env_set_pagesize( mdb->mi_dbenv, mdb->mi_pagesize );
+		if ( rc ) {
+			Debug( LDAP_DEBUG_ANY,
+				LDAP_XSTRING(mdb_db_open) ": database \"%s\": "
+				"mdb_env_set_pagesize failed: %s (%d).\n",
+				be->be_suffix[0].bv_val, mdb_strerror(rc), rc );
+			goto fail;
+		}
+	}
+
 #ifdef MDB_ENCRYPT
 	if ( mdb->mi_dbenv_encfuncs ) {
 		mdb_modsetup( mdb->mi_dbenv, mdb->mi_dbenv_encfuncs, mdb->mi_dbenv_enckey );
@@ -365,7 +376,11 @@ mdb_db_close( BackendDB *be, ConfigReply *cr )
 	}
 
 	if ( mdb->mi_dbenv ) {
-		mdb_reader_flush( mdb->mi_dbenv );
+		if ( ( slapMode & SLAP_SERVER_MODE ) &&
+			ldap_pvt_thread_pool_pausing( &connection_pool ) > 0 )
+			ldap_pvt_thread_pool_purgekey( mdb->mi_dbenv );
+		else
+			mdb_reader_flush( mdb->mi_dbenv );
 
 		if ( mdb->mi_dbis[0] ) {
 			int i;

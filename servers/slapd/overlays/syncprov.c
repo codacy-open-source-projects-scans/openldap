@@ -99,9 +99,6 @@ typedef struct sync_control {
 	int sr_rhint;
 } sync_control;
 
-#if 0 /* moved back to slap.h */
-#define	o_sync	o_ctrlflag[slap_cids.sc_LDAPsync]
-#endif
 /* o_sync_mode uses data bits of o_sync */
 #define	o_sync_mode	o_ctrlflag[slap_cids.sc_LDAPsync]
 
@@ -162,8 +159,10 @@ typedef struct syncprov_info_t {
 	int		si_nopres;	/* Skip present phase */
 	int		si_usehint;	/* use reload hint */
 	int		si_active;	/* True if there are active mods */
+#ifdef USE_SI_DIRTY		/* disabled due to ITS#10026 */
 	int		si_dirty;	/* True if the context is dirty, i.e changes
 						 * have been made without updating the csn. */
+#endif
 	time_t	si_chklast;	/* time of last checkpoint */
 	Avlnode	*si_mods;	/* entries being modified */
 	sessionlog	*si_logs;
@@ -990,7 +989,7 @@ syncprov_sendresp( Operation *op, resinfo *ri, syncops *so, int mode )
 
 	switch( mode ) {
 	case LDAP_SYNC_ADD:
-		if ( ri->ri_isref && so->s_op->o_managedsait <= SLAP_CONTROL_IGNORED ) {
+		if ( ri->ri_isref && !wants_manageDSAit( so->s_op ) ) {
 			rs.sr_ref = get_entry_referrals( op, rs.sr_entry );
 			rs.sr_err = send_search_reference( op, &rs );
 			ber_bvarray_free( rs.sr_ref );
@@ -1012,7 +1011,7 @@ syncprov_sendresp( Operation *op, resinfo *ri, syncops *so, int mode )
 		e_uuid.e_attrs = NULL;
 		e_uuid.e_name = ri->ri_dn;
 		e_uuid.e_nname = ri->ri_ndn;
-		if ( ri->ri_isref && so->s_op->o_managedsait <= SLAP_CONTROL_IGNORED ) {
+		if ( ri->ri_isref && !wants_manageDSAit( so->s_op ) ) {
 			struct berval bv = BER_BVNULL;
 			rs.sr_ref = &bv;
 			rs.sr_err = send_search_reference( op, &rs );
@@ -1125,8 +1124,11 @@ syncprov_qtask( void *ctx, void *arg )
 		return NULL;
 	}
 
-	/* if an error occurred, or no responses left, task is no longer queued */
-	so->s_flags &= ~PS_TASK_QUEUED;
+	/* getting here means there were errors or there's nothing left
+	 * to do, so this task will no longer be queued. But wait to
+	 * reset the flag until we know we're not dropping the op
+	 * ourselves.
+	 */
 
 	flag = FS_UNLINK;
 
@@ -1139,6 +1141,8 @@ syncprov_qtask( void *ctx, void *arg )
 	/* decrement use count... */
 	frc = syncprov_free_syncop( so, flag );
 	if ( frc == FSR_NOTFREE ) {
+		/* we're not dropping the op, but it is no longer queued. */
+		so->s_flags &= ~PS_TASK_QUEUED;
 		ldap_pvt_thread_mutex_unlock( &so->s_mutex );
 	}
 
@@ -2379,6 +2383,16 @@ syncprov_play_accesslog( Operation *op, SlapReply *rs, sync_control *srs,
 			newestcsn = ctxcsn[i];
 		}
 	}
+
+	if ( BER_BVISNULL( &oldestcsn ) ) {
+		/*
+		 * ITS#10535 If ctxcsn covers srs->sr_state.ctxcsn, then they are equal
+		 * and oldestcsn/newestcsn are not set. Also we have nothing to send
+		 * either, just skip
+		 */
+		be_entry_release_rw( &fop, e, 0 );
+		return LDAP_SUCCESS;
+	}
 	assert( !BER_BVISEMPTY( &oldestcsn ) && !BER_BVISEMPTY( &newestcsn ) &&
 			ber_bvcmp( &oldestcsn, &newestcsn ) < 0 );
 	slap_sl_free( minsids, op->o_tmpmemctx );
@@ -2468,8 +2482,10 @@ syncprov_new_ctxcsn( opcookie *opc, syncprov_info_t *si, int csn_changed, int nu
 			csn_changed = 1;
 		}
 	}
+#ifdef USE_SI_DIRTY
 	if ( csn_changed )
 		si->si_dirty = 0;
+#endif
 	ldap_pvt_thread_rdwr_wunlock( &si->si_csn_rwlock );
 
 	if ( csn_changed ) {
@@ -2611,7 +2627,9 @@ syncprov_op_response( Operation *op, SlapReply *rs )
 				}
 			}
 		}
+#ifdef USE_SI_DIRTY
 		si->si_dirty = !csn_changed;
+#endif
 		ldap_pvt_thread_rdwr_wunlock( &si->si_csn_rwlock );
 
 added:
@@ -2679,7 +2697,7 @@ syncprov_op_compare( Operation *op, SlapReply *rs )
 			goto return_results;
 		}
 
-		if ( get_assert( op ) &&
+		if ( wants_assert( op ) &&
 			( test_filter( op, &e, get_assertion( op ) ) != LDAP_COMPARE_TRUE ) )
 		{
 			rs->sr_err = LDAP_ASSERTION_FAILED;
@@ -3163,9 +3181,9 @@ syncprov_op_search( Operation *op, SlapReply *rs )
 	int i, *sids, numcsns;
 	struct berval mincsn, maxcsn;
 	int minsid, maxsid;
-	int dirty = 0;
+	int dirty = 1;		/* ITS#10026: assume context is always dirty */
 
-	if ( op->o_sync > SLAP_CONTROL_IGNORED ) {
+	if ( wants_sync( op ) ) {
 		cb = op->o_tmpcalloc( 1, sizeof(slap_callback), op->o_tmpmemctx );
 		cb->sc_response = syncprov_search_cb;
 		cb->sc_cleanup = syncprov_search_cleanup;
@@ -3215,6 +3233,8 @@ syncprov_op_search( Operation *op, SlapReply *rs )
 					"both our DB and client empty, ignoring NO_SUCH_OBJECT\n",
 					op->o_log_prefix );
 			rs->sr_err = LDAP_SUCCESS;
+			/* an empty context can't be dirty */
+			dirty = 0;
 		}
 
 		if ( rs->sr_err != LDAP_SUCCESS ) {
@@ -3276,7 +3296,9 @@ aband:
 		ctxcsn = NULL;
 		sids = NULL;
 	}
+#ifdef USE_SI_DIRTY
 	dirty = si->si_dirty;
+#endif
 	ldap_pvt_thread_rdwr_runlock( &si->si_csn_rwlock );
 
 	/* If we have a cookie, handle the PRESENT lookups */
@@ -3609,7 +3631,7 @@ syncprov_operational(
 	/* This prevents generating unnecessarily; frontend will strip
 	 * any statically stored copy.
 	 */
-	if ( op->o_sync != SLAP_CONTROL_NONE )
+	if ( wants_sync( op ) )
 		return SLAP_CB_CONTINUE;
 
 	if ( rs->sr_entry &&

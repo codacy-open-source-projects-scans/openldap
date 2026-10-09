@@ -40,7 +40,8 @@ request_abandon( LloadConnection *c, LloadOperation *op )
 
     op->o_res = LLOAD_OP_COMPLETED;
 
-    if ( ber_decode_int( &op->o_request, &needle.o_client_msgid ) ) {
+    if ( ber_decode_int( &op->o_request, &needle.o_client_msgid ) ||
+            needle.o_client_msgid <= 0 ) {
         Debug( LDAP_DEBUG_STATS, "request_abandon: "
                 "connid=%lu msgid=%d invalid integer sent in abandon request\n",
                 c->c_connid, op->o_client_msgid );
@@ -48,6 +49,13 @@ request_abandon( LloadConnection *c, LloadOperation *op )
         OPERATION_UNLINK(op);
         CONNECTION_LOCK_DESTROY(c);
         return -1;
+    }
+
+    if ( op->o_client_msgid == needle.o_client_msgid ) {
+        Debug( LDAP_DEBUG_STATS, "request_abandon: "
+                "connid=%lu msgid=%d requests abandon of itself\n",
+                c->c_connid, op->o_client_msgid );
+        goto done;
     }
 
     CONNECTION_LOCK(c);
@@ -113,8 +121,6 @@ request_process( LloadConnection *client, LloadOperation *op )
             if ( ber_skip_element( control_ber, &needle.oid ) == LBER_ERROR ) {
                 res = LDAP_PROTOCOL_ERROR;
                 message = "invalid control";
-
-                operation_send_reject( op, res, message, 1 );
                 goto fail;
             }
 
@@ -135,8 +141,6 @@ request_process( LloadConnection *client, LloadOperation *op )
     if ( op->o_restricted == LLOAD_OP_RESTRICTED_REJECT ) {
         res = LDAP_UNWILLING_TO_PERFORM;
         message = "extended operation or control disallowed";
-
-        operation_send_reject( op, res, message, 1 );
         goto fail;
     }
 
@@ -195,7 +199,6 @@ request_process( LloadConnection *client, LloadOperation *op )
                 "connid=%lu, msgid=%d no available connection found\n",
                 op->o_client_connid, op->o_client_msgid );
 
-        operation_send_reject( op, res, message, 1 );
         goto fail;
     }
     CONNECTION_ASSERT_LOCKED(upstream);
@@ -324,12 +327,15 @@ request_process( LloadConnection *client, LloadOperation *op )
     return rc;
 
 fail:
+    /* We have not committed any restrictions in the end */
+    op->o_restricted = LLOAD_OP_NOT_RESTRICTED;
+
     if ( upstream ) {
         CONNECTION_LOCK_DESTROY(upstream);
 
-        /* We have not committed any restrictions in the end */
-        op->o_restricted = LLOAD_OP_NOT_RESTRICTED;
         operation_send_reject( op, LDAP_OTHER, "internal error", 0 );
+    } else {
+        operation_send_reject( op, res, message, 1 );
     }
 
     OPERATION_UNLINK(op);
@@ -683,15 +689,17 @@ client_reset( LloadConnection *c )
     if ( restricted && restricted < LLOAD_OP_RESTRICTED_ISOLATE ) {
         if ( c->c_backend ) {
             assert( c->c_restricted <= LLOAD_OP_RESTRICTED_BACKEND );
-            assert( c->c_restricted_inflight == 0 );
+            assert( c->c_restricted_inflight <= executing );
             c->c_backend = NULL;
             c->c_restricted_at = 0;
+            c->c_restricted_inflight = 0;
         } else {
             assert( c->c_restricted == LLOAD_OP_RESTRICTED_UPSTREAM );
             assert( c->c_linked_upstream != NULL );
             linked_upstream = c->c_linked_upstream;
             c->c_linked_upstream = NULL;
         }
+        c->c_restricted = LLOAD_OP_NOT_RESTRICTED;
     }
     CONNECTION_UNLOCK(c);
 

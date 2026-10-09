@@ -964,7 +964,7 @@ return_results:
 #ifdef SLAP_CONTROL_X_WHATFAILED
 			/* might have not been parsed yet? */
 			if ( failed_oid != NULL ) {
-				if ( !get_whatFailed( op ) ) {
+				if ( !wants_whatFailed( op ) ) {
 					/* look it up */
 
 					/* step through each remaining element */
@@ -1017,7 +1017,7 @@ return_results:
 					}
 				}
 
-				if ( get_whatFailed( op ) ) {
+				if ( wants_whatFailed( op ) ) {
 					char *oids[ 2 ];
 					oids[ 0 ] = failed_oid;
 					oids[ 1 ] = NULL;
@@ -1042,7 +1042,7 @@ slap_remove_control(
 {
 	int		i, j;
 
-	switch ( op->o_ctrlflag[ ctrl ] ) {
+	switch ( _SCM(op->o_ctrlflag[ ctrl ]) ) {
 	case SLAP_CONTROL_NONCRITICAL:
 		for ( i = 0, j = -1; op->o_ctrls[ i ] != NULL; i++ ) {
 			if ( strcmp( op->o_ctrls[ i ]->ldctl_oid,
@@ -1093,10 +1093,6 @@ slap_remove_control(
 			"critical control \"%s\" not supported.\n",
 			op->o_log_prefix, slap_known_controls[ ctrl ] );
 		break;
-
-	default:
-		/* handle all cases! */
-		assert( 0 );
 	}
 
 	return rs->sr_err;
@@ -1503,7 +1499,7 @@ parseReadAttrs(
 		return LDAP_PROTOCOL_ERROR;
 	}
 
-	if ( op->o_txnSpec ) { /* temporary limitation */
+	if ( wants_txnSpec( op ) ) { /* temporary limitation */
 		rs->sr_text = READMSG( post, "cannot perform in transaction" );
 		return LDAP_UNWILLING_TO_PERFORM;
 	}

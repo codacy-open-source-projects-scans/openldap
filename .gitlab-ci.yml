@@ -39,6 +39,7 @@ build-openssl-heimdal-lloadd:
     - echo "$(date -u -d "now - $STARTTIME sec" +%T) Building"
     - make
     - ulimit -n 4096 # back-monitor takes a while scanning a long connections array
+    - export SLAPD_USE_SASL=yes
     - SLAPD_COMMON_WRAPPER=gdb make test
   artifacts:
     name: testdir
@@ -48,6 +49,8 @@ build-openssl-heimdal-lloadd:
       - obj/tests/testrun/
       - obj/servers/
       - obj/libraries/
+    reports:
+      junit: obj/tests/junit*.xml
 
 build-gnutls-mit-standalone-lloadd:
   stage: build
@@ -64,6 +67,7 @@ build-gnutls-mit-standalone-lloadd:
     - echo "$(date -u -d "now - $STARTTIME sec" +%T) Building"
     - make
     - ulimit -n 4096 # back-monitor takes a while scanning a long connections array
+    - export SLAPD_USE_SASL=yes
     - SLAPD_COMMON_WRAPPER=gdb make test
   artifacts:
     name: testdir
@@ -73,6 +77,8 @@ build-gnutls-mit-standalone-lloadd:
       - obj/tests/testrun/
       - obj/servers/
       - obj/libraries/
+    reports:
+      junit: obj/tests/junit*.xml
 
 build-mbedtls-mit-lloadd:
   image: "debian:testing"
@@ -90,6 +96,7 @@ build-mbedtls-mit-lloadd:
     - echo "$(date -u -d "now - $STARTTIME sec" +%T) Building"
     - make
     - ulimit -n 4096 # back-monitor takes a while scanning a long connections array
+    - export SLAPD_USE_SASL=yes
     - SLAPD_COMMON_WRAPPER=gdb make test
   artifacts:
     name: testdir
@@ -99,3 +106,5 @@ build-mbedtls-mit-lloadd:
       - obj/tests/testrun/
       - obj/servers/
       - obj/libraries/
+    reports:
+      junit: obj/tests/junit*.xml

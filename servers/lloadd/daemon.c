@@ -704,14 +704,12 @@ lloadd_daemon_destroy( void )
     return 0;
 }
 
-static void
-destroy_listeners( void )
+void
+lloadd_listeners_destroy( void )
 {
     LloadListener *l, **ll = lload_listeners;
 
     if ( ll == NULL ) return;
-
-    ldap_pvt_thread_join( listener_tid, (void *)NULL );
 
     while ( (l = *ll++) != NULL ) {
         lload_listener_free( l );
@@ -1301,11 +1299,11 @@ lloadd_daemon( struct event_base *daemon_base )
             "Main event loop finished: rc=%d\n",
             rc );
 
-    /* shutdown */
-    event_base_loopexit( listener_base, 0 );
+    /* Shutdown: */
 
     /* wait for the listener threads to complete */
-    destroy_listeners();
+    event_base_loopexit( listener_base, 0 );
+    ldap_pvt_thread_join( listener_tid, (void *)NULL );
 
     /* Mark upstream connections closing and prevent from opening new ones */
     lload_tiers_shutdown();
@@ -1338,7 +1336,6 @@ lloadd_daemon( struct event_base *daemon_base )
 
     lload_tiers_destroy();
     clients_destroy( 0 );
-    lload_bindconf_free( &bindconf );
     evdns_base_free( dnsbase, 0 );
 
     ch_free( daemon_tid );
@@ -1427,7 +1424,8 @@ detach_linked_backend_cb( LloadConnection *client, LloadBackend *b )
 
     client->c_restricted = LLOAD_OP_NOT_RESTRICTED;
     client->c_restricted_at = 0;
-    client->c_restricted_inflight = 0;
+    client->c_backend = NULL;
+    /* c_restricted_inflight is adjusted through backend_reset later */
 
     return rc;
 }

@@ -149,7 +149,7 @@ static int search_candidates(
      */
 	if (!oc_filter(op->oq_search.rs_filter, 1, &depth)
 		&& !get_subentries_visibility(op)) {
-		if( !get_manageDSAit(op) && !get_domainScope(op) ) {
+		if( !wants_manageDSAit(op) && !wants_domainScope(op) ) {
 			/* match referral objects */
 			struct berval bv_ref = BER_BVC( "referral" );
 			rf.f_choice = LDAP_FILTER_EQUALITY;
@@ -230,7 +230,7 @@ parse_paged_cookie( Operation *op, SlapReply *rs )
 	/* this function must be invoked only if the pagedResults
      * control has been detected, parsed and partially checked
      * by the frontend */
-	assert( get_pagedresults( op ) > SLAP_CONTROL_IGNORED );
+	assert( wants_pagedresults( op ) );
 
 	/* cookie decoding/checks deferred to backend... */
 	if ( ps->ps_cookieval.bv_len ) {
@@ -340,7 +340,7 @@ wt_search( Operation *op, SlapReply *rs )
 
 	Debug( LDAP_DEBUG_ARGS, "==> wt_search: %s\n", op->o_req_dn.bv_val );
 
-	manageDSAit = get_manageDSAit( op );
+	manageDSAit = wants_manageDSAit( op );
 
 	wc = wt_ctx_get(op, wi);
 	if( !wc ){
@@ -443,7 +443,7 @@ wt_search( Operation *op, SlapReply *rs )
 		goto done;
 	}
 
-	if ( get_assert( op ) &&
+	if ( wants_assert( op ) &&
 		 ( test_filter( op, e, get_assertion( op )) != LDAP_COMPARE_TRUE ))
 	{
 		rs->sr_err = LDAP_ASSERTION_FAILED;
@@ -502,7 +502,7 @@ wt_search( Operation *op, SlapReply *rs )
 		tentries = WT_IDL_N(candidates);
 	}
 
-	if ( get_pagedresults( op ) > SLAP_CONTROL_IGNORED ) {
+	if ( wants_pagedresults( op ) ) {
 		/* TODO: pageresult */
 		PagedResultsState *ps = op->o_pagedresults_state;
 		/* deferred cookie parsing */
@@ -584,7 +584,7 @@ loop_begin:
 					goto loop_continue;
 				}
 
-			} else if ( get_subentries( op ) &&
+			} else if ( wants_subentries( op ) &&
 						!get_subentries_visibility( op ))
 			{
 				/* only subentries are visible */
@@ -663,7 +663,7 @@ loop_begin:
 		rs->sr_err = test_filter( op, e, op->oq_search.rs_filter );
 		if ( rs->sr_err == LDAP_COMPARE_TRUE ) {
 			/* check size limit */
-			if ( get_pagedresults(op) > SLAP_CONTROL_IGNORED ) {
+			if ( wants_pagedresults(op) ) {
 				if ( rs->sr_nentries >= ((PagedResultsState *)op->o_pagedresults_state)->ps_size ) {
 					wt_entry_return( e );
 					e = NULL;
@@ -722,7 +722,7 @@ nochange:
 	rs->sr_ref = rs->sr_v2ref;
 	rs->sr_err = (rs->sr_v2ref == NULL) ? LDAP_SUCCESS : LDAP_REFERRAL;
 	rs->sr_rspoid = NULL;
-	if ( get_pagedresults(op) > SLAP_CONTROL_IGNORED ) {
+	if ( wants_pagedresults(op) ) {
 		send_paged_response( op, rs, NULL, 0 );
 	} else {
 		send_ldap_result( op, rs );
